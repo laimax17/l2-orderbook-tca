@@ -30,6 +30,9 @@ packages = ["src/l2tca"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Put the repo root on sys.path so the shared fixtures in tests/conftest.py can
+# be imported by name from the spec suites, however pytest was invoked.
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
 filterwarnings = ["error::DeprecationWarning:l2tca.*"]
