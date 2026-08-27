@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --all-groups --python ${{ matrix.python-version }}
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Test
+        run: uv run pytest -q
+
+      - name: End-to-end smoke (no network)
+        run: |
+          uv run l2tca synth --updates 2000 --out data/raw/ci.jsonl
+          uv run l2tca inspect data/raw/ci.jsonl
+          uv run l2tca replay data/raw/ci.jsonl --limit 500
+          uv run l2tca convert data/raw/ci.jsonl --out data/parquet
+          uv run l2tca bench data/raw/ci.jsonl --warmup 100

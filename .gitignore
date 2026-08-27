@@ -1,0 +1,20 @@
+# Recorded market data and derived artifacts are never committed.
+data/raw/**
+!data/raw/.gitkeep
+data/parquet/**
+!data/parquet/.gitkeep
+bench_results/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+.DS_Store
