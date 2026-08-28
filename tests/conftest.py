@@ -7,11 +7,11 @@ import json
 from pathlib import Path
 
 import pytest
+from tests.factories import FIXTURE_CAPTURE, synthetic_capture
 
 from l2tca.config import FeedConfig
-from l2tca.feed.messages import RawMessage
-from l2tca.feed.recorder import JsonlRecorder
-from l2tca.feed.synthetic import synthetic_session
+
+# -- captures --------------------------------------------------------------
 
 
 @pytest.fixture
@@ -20,24 +20,27 @@ def config() -> FeedConfig:
 
 
 @pytest.fixture
-def capture(tmp_path: Path, config: FeedConfig) -> Path:
+def capture(tmp_path: Path) -> Path:
     """A small deterministic capture written through the real recorder."""
-    path = tmp_path / "capture.jsonl"
-    with JsonlRecorder(path, config) as recorder:
-        for seq, (offset, payload) in enumerate(
-            synthetic_session(symbol=config.wire_symbol, depth=20, updates=120, seed=1)
-        ):
-            delta = int(offset * 1e9)
-            recorder.write_message(
-                RawMessage(
-                    seq=seq,
-                    recv_ns=1_000_000_000 + delta,
-                    recv_wall_ns=1_767_000_000_000_000_000 + delta,
-                    payload=payload,
-                )
-            )
-    return path
+    return synthetic_capture(tmp_path / "capture.jsonl")
 
+
+@pytest.fixture(scope="session")
+def sample_capture() -> Path:
+    """A real recorded session, if one has been committed.
+
+    Skips otherwise. Drop a capture at ``tests/fixtures/sample.jsonl``
+    (``l2tca record --duration 600``, trimmed) to activate these.
+    """
+    if not FIXTURE_CAPTURE.exists():
+        pytest.skip(
+            "no recorded sample at tests/fixtures/sample.jsonl -- "
+            "run `l2tca record` and commit a trimmed capture"
+        )
+    return FIXTURE_CAPTURE
+
+
+# -- wire fixtures ---------------------------------------------------------
 
 SNAPSHOT_FRAME = json.dumps(
     {
@@ -83,12 +86,15 @@ STATUS_FRAME = json.dumps(
 )
 
 
+# -- transport double ------------------------------------------------------
+
+
 class FakeWebSocket:
     """Scripted stand-in for a Kraken connection.
 
-    ``frames`` are returned in order; an exception instance in the list is
-    raised instead. Once exhausted the socket either drops (the default, which
-    exercises reconnect) or hangs (which exercises the staleness watchdog).
+    ``frames`` are returned in order; an exception instance is raised instead.
+    Once exhausted the socket either drops (the default, exercising reconnect)
+    or hangs (exercising the staleness watchdog).
     """
 
     def __init__(self, frames: list, *, on_exhaust: str = "drop", ack: bool = True) -> None:
@@ -113,10 +119,8 @@ class FakeWebSocket:
                     }
                 ),
             )
-        elif obj.get("method") == "ping":
-            # Deliberately silent: a ping that goes unanswered is what the
-            # staleness watchdog has to escalate on.
-            pass
+        # A ping is deliberately left unanswered: an unanswered ping is what the
+        # staleness watchdog has to escalate on.
 
     async def recv(self) -> str:
         if self.pending:
@@ -134,7 +138,7 @@ class FakeWebSocket:
 
 
 def sequenced_connect(sockets: list[FakeWebSocket]):
-    """Connect factory handing out ``sockets`` in order, then raising."""
+    """Connect factory handing out ``sockets`` in order, then refusing."""
     remaining = list(sockets)
 
     async def connect(_config: FeedConfig) -> FakeWebSocket:
@@ -143,3 +147,13 @@ def sequenced_connect(sockets: list[FakeWebSocket]):
         return remaining.pop(0)
 
     return connect
+
+
+def recording_sleep() -> tuple[list[float], object]:
+    """A sleep that records its arguments instead of waiting."""
+    slept: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        slept.append(delay)
+
+    return slept, sleep

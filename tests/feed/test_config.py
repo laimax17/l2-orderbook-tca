@@ -14,7 +14,7 @@ from l2tca.config import FeedConfig, normalize_symbol, symbol_to_path_token
         ("ETH/USD", "ETH/USD"),
     ],
 )
-def test_normalize_symbol_maps_v1_spelling(given: str, expected: str) -> None:
+def test_normalize_symbol_maps_the_v1_spelling(given: str, expected: str) -> None:
     assert normalize_symbol(given) == expected
 
 

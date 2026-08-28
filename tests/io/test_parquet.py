@@ -13,8 +13,7 @@ from l2tca.io.schema import SCHEMA_VERSION, TABLES, partition_of
 from l2tca.io.writer import PartitionedParquetWriter
 
 HOUR_NS = 3_600 * 1_000_000_000
-# 2026-01-02T09:30:00Z
-BASE_NS = 1_767_346_200_000_000_000
+BASE_NS = 1_767_346_200_000_000_000  # 2026-01-02T09:30:00Z
 
 
 def _tick_row(wall_ns: int, seq: int = 0, price: float = 64_000.0) -> dict:
@@ -33,15 +32,16 @@ def _tick_row(wall_ns: int, seq: int = 0, price: float = 64_000.0) -> dict:
 
 
 def test_partition_key_is_utc_symbol_date_hour() -> None:
-    key = partition_of("BTC-USD", BASE_NS)
-    assert key == (("symbol", "BTC-USD"), ("date", "2026-01-02"), ("hour", "09"))
+    assert partition_of("BTC-USD", BASE_NS) == (
+        ("symbol", "BTC-USD"),
+        ("date", "2026-01-02"),
+        ("hour", "09"),
+    )
 
 
 def test_rows_land_in_hourly_directories(tmp_path: Path) -> None:
     with PartitionedParquetWriter(tmp_path, "tick", "BTC-USD") as writer:
-        writer.write_rows(
-            [_tick_row(BASE_NS + i * HOUR_NS // 2, seq=i) for i in range(6)]
-        )
+        writer.write_rows([_tick_row(BASE_NS + i * HOUR_NS // 2, seq=i) for i in range(6)])
 
     hours = sorted(
         p.name for p in (tmp_path / "tick" / "symbol=BTC-USD" / "date=2026-01-02").iterdir()
@@ -103,8 +103,7 @@ def test_signal_table_is_long_format(tmp_path: Path) -> None:
                  "name": "micro_price", "value": 64_000.05, "levels": 0},
             ]
         )
-    frame = read_table(tmp_path, "signal")
-    assert set(frame.get_column("name")) == {"obi", "micro_price"}
+    assert set(read_table(tmp_path, "signal").get_column("name")) == {"obi", "micro_price"}
 
 
 def test_a_missing_non_nullable_value_fails_at_write_time(tmp_path: Path) -> None:
@@ -124,7 +123,9 @@ def test_reruns_append_parts_instead_of_overwriting(tmp_path: Path) -> None:
 
     directory = tmp_path / "tick" / "symbol=BTC-USD" / "date=2026-01-02" / "hour=09"
     assert sorted(p.name for p in directory.iterdir()) == [
-        "part-00000.parquet", "part-00001.parquet", "part-00002.parquet"
+        "part-00000.parquet",
+        "part-00001.parquet",
+        "part-00002.parquet",
     ]
     assert read_table(tmp_path, "tick").height == 3
 
@@ -160,7 +161,7 @@ def test_validation_rejects_a_missing_column() -> None:
 
 
 def test_validation_rejects_a_narrowed_dtype(tmp_path: Path) -> None:
-    """Polars will read an int32 where int64 was declared; downstream maths then overflows."""
+    """Polars will read an int32 where int64 was declared; arithmetic then overflows."""
     with PartitionedParquetWriter(tmp_path, "tick", "BTC-USD") as writer:
         writer.write_row(_tick_row(BASE_NS))
     frame = read_table(tmp_path, "tick").with_columns(pl.col("seq").cast(pl.Int32))
@@ -175,7 +176,7 @@ def test_missing_dataset_is_a_clear_error(tmp_path: Path) -> None:
 
 def test_capture_converts_to_ticks_end_to_end(tmp_path: Path, capture: Path) -> None:
     rows = list(iter_tick_rows(capture))
-    assert rows, "the synthetic capture should carry book frames"
+    assert rows, "the capture should carry book frames"
     assert {r["frame_type"] for r in rows} == {"snapshot", "update"}
     assert any(r["is_delete"] for r in rows), "deletes must survive the conversion"
 
@@ -185,7 +186,7 @@ def test_capture_converts_to_ticks_end_to_end(tmp_path: Path, capture: Path) -> 
     frame = read_table(tmp_path, "tick")
     assert frame.height == len(rows)
     # A zero quantity is a removal, and the flag records that so no reader has to
-    # know Kraken's convention or compare a float against zero.
+    # know the convention or compare a float against zero.
     deletes = frame.filter(pl.col("is_delete"))
     assert deletes.height > 0
     assert deletes.get_column("qty").to_list() == [0.0] * deletes.height

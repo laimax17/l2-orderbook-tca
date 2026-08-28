@@ -15,9 +15,8 @@ from l2tca.feed.messages import (
     Status,
     SubscriptionAck,
     Unknown,
-    parse,
-    parse_exchange_timestamp,
 )
+from l2tca.feed.parser import parse, parse_exchange_timestamp
 
 
 def test_snapshot_parses_levels_and_checksum() -> None:
@@ -61,13 +60,8 @@ def test_heartbeat_and_status() -> None:
     assert status.connection_id == 12345
 
 
-def test_subscription_ack_success_and_failure() -> None:
-    ok = parse(json.dumps({"method": "subscribe", "req_id": 3, "success": True, "result": {}}))
-    assert isinstance(ok, SubscriptionAck)
-    assert ok.success and ok.req_id == 3
-
-    # A rejection is still an ack -- the client is waiting for one, and turning
-    # it into a generic error would leave the handshake hanging.
+def test_a_rejected_subscription_is_still_an_ack() -> None:
+    """Turning it into a generic error would leave the handshake waiting forever."""
     bad = parse(
         json.dumps(
             {"method": "subscribe", "req_id": 4, "success": False, "error": "Subscription failed"}
@@ -77,6 +71,12 @@ def test_subscription_ack_success_and_failure() -> None:
     assert not bad.success
     assert bad.req_id == 4
     assert bad.error == "Subscription failed"
+
+
+def test_successful_subscription_ack() -> None:
+    ok = parse(json.dumps({"method": "subscribe", "req_id": 3, "success": True, "result": {}}))
+    assert isinstance(ok, SubscriptionAck)
+    assert ok.success and ok.req_id == 3
 
 
 def test_a_bare_error_frame_is_an_error() -> None:
@@ -92,9 +92,15 @@ def test_pong_and_unknown_channel() -> None:
 
 def test_parse_never_raises_on_garbage() -> None:
     """The feed has to survive whatever lands on the wire."""
-    for payload in ("", "{", "null", "[]", '{"channel":"book","type":"update"}',
-                    '{"channel":"book","type":"update","data":[{}]}',
-                    '{"channel":"book","type":"wat","data":[{"symbol":"X"}]}'):
+    for payload in (
+        "",
+        "{",
+        "null",
+        "[]",
+        '{"channel":"book","type":"update"}',
+        '{"channel":"book","type":"update","data":[{}]}',
+        '{"channel":"book","type":"wat","data":[{"symbol":"X"}]}',
+    ):
         assert isinstance(parse(payload), ErrorMessage | Unknown)
 
 

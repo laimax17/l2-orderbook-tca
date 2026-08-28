@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import random
 
 import pytest
 from tests.conftest import (
@@ -14,12 +13,15 @@ from tests.conftest import (
     STATUS_FRAME,
     UPDATE_FRAME,
     FakeWebSocket,
+    recording_sleep,
     sequenced_connect,
 )
 
 from l2tca.config import FeedConfig
-from l2tca.feed.kraken import KrakenFeedClient, SubscriptionError
-from l2tca.feed.messages import BookSnapshot, parse
+from l2tca.feed.client import KrakenFeedClient
+from l2tca.feed.messages import BookSnapshot
+from l2tca.feed.parser import parse
+from l2tca.feed.subscription import SubscriptionError, subscribe_request
 
 
 async def collect(client: KrakenFeedClient, n: int) -> list:
@@ -32,24 +34,9 @@ async def collect(client: KrakenFeedClient, n: int) -> list:
     return out
 
 
-def recording_sleep() -> tuple[list[float], object]:
-    slept: list[float] = []
-
-    async def sleep(delay: float) -> None:
-        slept.append(delay)
-
-    return slept, sleep
-
-
-async def test_subscribe_request_matches_the_v2_schema(config: FeedConfig) -> None:
-    socket = FakeWebSocket([STATUS_FRAME, SNAPSHOT_FRAME], on_exhaust="drop")
-    client = KrakenFeedClient(
-        FeedConfig(symbol="XBT/USD", depth=100, max_reconnects=0),
-        connect=sequenced_connect([socket]),
-    )
-    await collect(client, 3)
-
-    request = next(m for m in socket.sent if m.get("method") == "subscribe")
+def test_subscribe_request_matches_the_v2_schema() -> None:
+    request = subscribe_request(FeedConfig(symbol="XBT/USD", depth=100), req_id=1)
+    assert request["method"] == "subscribe"
     assert request["params"] == {
         "channel": "book",
         "symbol": ["BTC/USD"],  # XBT normalised on the wire
@@ -59,7 +46,7 @@ async def test_subscribe_request_matches_the_v2_schema(config: FeedConfig) -> No
 
 
 async def test_handshake_frames_are_not_swallowed(config: FeedConfig) -> None:
-    """The ack and anything before it must land in the recording, snapshot included."""
+    """The ack and anything before it must land in the capture, snapshot included."""
     socket = FakeWebSocket([STATUS_FRAME, SNAPSHOT_FRAME, UPDATE_FRAME], on_exhaust="hang")
     client = KrakenFeedClient(config, connect=sequenced_connect([socket]))
 
@@ -80,12 +67,14 @@ async def test_snapshot_before_ack_still_completes_the_handshake(config: FeedCon
     await client.aclose()
 
 
-async def test_rejected_subscription_is_not_retried(config: FeedConfig) -> None:
+async def test_rejected_subscription_is_not_retried() -> None:
     rejection = json.dumps(
         {"method": "subscribe", "req_id": 1, "success": False, "error": "Unsupported depth"}
     )
     socket = FakeWebSocket([rejection], on_exhaust="hang", ack=False)
-    client = KrakenFeedClient(config, connect=sequenced_connect([socket]))
+    client = KrakenFeedClient(
+        FeedConfig(max_reconnects=2), connect=sequenced_connect([socket])
+    )
 
     with pytest.raises(SubscriptionError, match="Unsupported depth"):
         await collect(client, 1)
@@ -97,12 +86,7 @@ async def test_dropped_connection_reconnects_and_resubscribes(config: FeedConfig
     second = FakeWebSocket([UPDATE_FRAME, HEARTBEAT_FRAME], on_exhaust="hang")
     slept, sleep = recording_sleep()
 
-    client = KrakenFeedClient(
-        config,
-        connect=sequenced_connect([first, second]),
-        sleep=sleep,
-        rng=random.Random(1),
-    )
+    client = KrakenFeedClient(config, connect=sequenced_connect([first, second]), sleep=sleep)
     messages = await collect(client, 5)
     await client.aclose()
 
@@ -115,7 +99,7 @@ async def test_dropped_connection_reconnects_and_resubscribes(config: FeedConfig
     assert [m.seq for m in messages] == list(range(len(messages)))
 
 
-async def test_backoff_grows_across_consecutive_failures(config: FeedConfig) -> None:
+async def test_backoff_grows_across_consecutive_failures() -> None:
     """Sockets that never deliver data must not reset the ladder."""
     sockets = [FakeWebSocket([], on_exhaust="drop", ack=False) for _ in range(4)]
     slept, sleep = recording_sleep()
@@ -134,7 +118,7 @@ async def test_backoff_grows_across_consecutive_failures(config: FeedConfig) -> 
     assert slept == [1.0, 2.0, 4.0]
 
 
-async def test_a_healthy_session_resets_the_backoff_ladder(config: FeedConfig) -> None:
+async def test_a_healthy_session_resets_the_backoff_ladder() -> None:
     healthy = [FakeWebSocket([SNAPSHOT_FRAME, UPDATE_FRAME], on_exhaust="drop") for _ in range(3)]
     slept, sleep = recording_sleep()
     client = KrakenFeedClient(
@@ -147,7 +131,7 @@ async def test_a_healthy_session_resets_the_backoff_ladder(config: FeedConfig) -
     assert slept == [1.0, 1.0], "each productive session should restart the ladder"
 
 
-async def test_max_reconnects_gives_up(config: FeedConfig) -> None:
+async def test_max_reconnects_gives_up() -> None:
     sockets = [FakeWebSocket([], on_exhaust="drop", ack=False) for _ in range(5)]
     _slept, sleep = recording_sleep()
     client = KrakenFeedClient(
@@ -155,8 +139,7 @@ async def test_max_reconnects_gives_up(config: FeedConfig) -> None:
         connect=sequenced_connect(sockets),
         sleep=sleep,
     )
-    messages = await collect(client, 100)
-    assert messages == []
+    assert await collect(client, 100) == []
     assert any(e.event == "giving_up" for e in client.stats.control)
 
 
@@ -216,12 +199,12 @@ async def test_cancellation_propagates(config: FeedConfig) -> None:
     socket = FakeWebSocket([SNAPSHOT_FRAME], on_exhaust="hang")
     client = KrakenFeedClient(config, connect=sequenced_connect([socket]))
 
-    async def run() -> None:
+    async def drive() -> None:
         async with contextlib.aclosing(client.stream()) as stream:
             async for _ in stream:
                 pass
 
-    task = asyncio.create_task(run())
+    task = asyncio.create_task(drive())
     await asyncio.sleep(0.01)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

@@ -14,9 +14,7 @@ def test_bounds_grow_geometrically_then_clamp() -> None:
 
 
 def test_unjittered_delays_follow_the_bounds() -> None:
-    delays = list(
-        islice(backoff_delays(initial=1.0, maximum=4.0, multiplier=2.0, jitter=False), 4)
-    )
+    delays = list(islice(backoff_delays(initial=1.0, maximum=4.0, multiplier=2.0, jitter=False), 4))
     assert delays == [1.0, 2.0, 4.0, 4.0]
 
 
@@ -24,9 +22,7 @@ def test_full_jitter_stays_within_the_bound_and_is_seed_reproducible() -> None:
     def run() -> list[float]:
         return list(
             islice(
-                backoff_delays(
-                    initial=0.5, maximum=8.0, multiplier=2.0, rng=random.Random(1234)
-                ),
+                backoff_delays(initial=0.5, maximum=8.0, multiplier=2.0, rng=random.Random(1234)),
                 20,
             )
         )
@@ -38,7 +34,7 @@ def test_full_jitter_stays_within_the_bound_and_is_seed_reproducible() -> None:
 
 
 def test_full_jitter_actually_spreads_the_retries() -> None:
-    """The whole point of jitter: not every client waking at the same instant."""
+    """The point of jitter: not every client waking at the same instant."""
     delays = list(
         islice(backoff_delays(initial=4.0, maximum=4.0, multiplier=2.0, rng=random.Random(7)), 50)
     )
