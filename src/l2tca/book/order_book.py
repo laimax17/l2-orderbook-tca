@@ -124,38 +124,36 @@ class OrderBook:
             non-positive quantity). Is that something to absorb or to raise on?
           - How does ``seq`` relate to snapshots versus updates?
         """
-        # raise NotImplementedError("core logic: implement by hand")
-        # snapshot_symbol = snapshot.symbol
+
         self.seq = 0
         self.orders = defaultdict(OrderNode)
         self.asks = SortedDict()
         self.bids = SortedDict()
         snapshot_bids = snapshot.bids
         snapshot_asks = snapshot.asks
-        # print('==============================================================\n')
-        # print(snapshot)
-        # print('==============================================================\n')
-        # print(snapshot_bids)
-        # print('==============================================================\n')
-        # print(snapshot_asks)
-        # print('==============================================================\n')
+
         for b in snapshot_bids:
             price, qty = b
+            if qty <= 0:
+                raise ValueError('qty is invalid.')
             new_id = uuid.uuid4()
             node = OrderNode(price, qty, "bid", new_id)
             self.orders[new_id] = node
-            # if price not in self.bids:
             self.bids[price] = OrderChain()
             self.bids[price].insert_node(node)
 
         for a in snapshot_asks:
             price, qty = a
+            if qty <= 0:
+                raise ValueError('qty is invalid.')
             new_id = uuid.uuid4()
             node = OrderNode(price, qty, "ask", new_id)
             self.orders[new_id] = node
-            # if price not in self.asks:
             self.asks[price] = OrderChain()
             self.asks[price].insert_node(node)
+
+        if self.best_ask.price <= self.best_bid.price:
+            raise ValueError('Crossed')
 
  
     def apply_update(self, update: BookUpdate) -> None:
@@ -187,12 +185,18 @@ class OrderBook:
     @property
     def best_bid(self) -> Level | None:
         """Highest resting bid, or ``None`` on an empty side. Target: O(1)."""
-        raise NotImplementedError("core logic: implement by hand")
+        if not self.bids:
+            return None
+        price = self.bids.keys()[-1]
+        return Level(price, self.bids[price].get_first().qty)
 
     @property
     def best_ask(self) -> Level | None:
         """Lowest resting ask, or ``None`` on an empty side. Target: O(1)."""
-        raise NotImplementedError("core logic: implement by hand")
+        if not self.asks:
+            return None
+        price = self.asks.keys()[0]
+        return Level(price, self.asks[price].get_first().qty)
 
     @property
     def mid(self) -> Decimal | None:
