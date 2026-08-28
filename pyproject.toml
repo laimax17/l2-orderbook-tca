@@ -39,11 +39,17 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
-    "core: exercises the hand-written core (book / signals / tca). These FAIL by design until the core is implemented -- they are the development target. Deselected by default; run them with `pytest -m core`.",
+    "core: exercises the hand-written core (book / signals / tca). These FAIL by design until the core is implemented -- they are the development target. Exclude them with `pytest -m 'not core'`.",
 ]
-# Default run covers the infrastructure only, so a green bar means "the
-# scaffolding still works". The core suite is red on purpose and is opted into.
-addopts = "-ra --strict-markers -m 'not core'"
+# No marker filter here on purpose. A filter in addopts is applied to every
+# invocation, including the explicit node ids an IDE passes when you click one
+# test -- which silently deselects it instead of running it. Filtering belongs
+# on the command line, where it is visible:
+#   pytest                 -> 118 pass, 74 fail. The core is unwritten; that is
+#                             the development target, and it should be loud.
+#   pytest -m "not core"   -> the infrastructure suite alone. What CI runs.
+#   pytest -m core         -> the core suite alone.
+addopts = "-ra --strict-markers"
 filterwarnings = ["error::DeprecationWarning:l2tca.*"]
 
 [tool.ruff]

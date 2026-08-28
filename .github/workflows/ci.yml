@@ -25,11 +25,11 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
-      # The `core` marker is deselected by default. Those tests fail on purpose
-      # until the hand-written core exists, so they are not a CI signal; a green
-      # run here means the infrastructure around them still works.
+      # The core suite fails on purpose until the hand-written core exists, so it
+      # is not a CI signal; excluded here explicitly rather than in pyproject, so
+      # that a bare `pytest` stays honest for whoever is writing the core.
       - name: Test (infrastructure)
-        run: uv run pytest -q
+        run: uv run pytest -m "not core" -q
 
       - name: End-to-end smoke (no network)
         run: |
