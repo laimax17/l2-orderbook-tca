@@ -20,12 +20,15 @@ jobs:
           enable-cache: true
 
       - name: Install
-        run: uv sync --all-groups --python ${{ matrix.python-version }}
+        run: uv sync --all-groups --all-extras --python ${{ matrix.python-version }}
 
       - name: Lint
         run: uv run ruff check .
 
-      - name: Test
+      # The `core` marker is deselected by default. Those tests fail on purpose
+      # until the hand-written core exists, so they are not a CI signal; a green
+      # run here means the infrastructure around them still works.
+      - name: Test (infrastructure)
         run: uv run pytest -q
 
       - name: End-to-end smoke (no network)
@@ -34,4 +37,10 @@ jobs:
           uv run l2tca inspect data/raw/ci.jsonl
           uv run l2tca replay data/raw/ci.jsonl --limit 500
           uv run l2tca convert data/raw/ci.jsonl --out data/parquet
-          uv run l2tca bench data/raw/ci.jsonl --warmup 100
+          uv run l2tca bench data/raw/ci.jsonl --warmup 100 --histogram
+          uv run l2tca bench data/raw/ci.jsonl --warmup 100 --json > bench.json
+          uv run l2tca plot latency --report bench.json --out /tmp/latency.png
+
+      - name: Core suite status (informational, red until the core is written)
+        if: always()
+        run: uv run pytest -m core -q --no-header || true
