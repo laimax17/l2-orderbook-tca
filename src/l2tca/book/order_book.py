@@ -126,9 +126,19 @@ class OrderBook:
         """
         # raise NotImplementedError("core logic: implement by hand")
         # snapshot_symbol = snapshot.symbol
+        self.seq = 0
+        self.orders = defaultdict(OrderNode)
+        self.asks = SortedDict()
+        self.bids = SortedDict()
         snapshot_bids = snapshot.bids
         snapshot_asks = snapshot.asks
-
+        # print('==============================================================\n')
+        # print(snapshot)
+        # print('==============================================================\n')
+        # print(snapshot_bids)
+        # print('==============================================================\n')
+        # print(snapshot_asks)
+        # print('==============================================================\n')
         for b in snapshot_bids:
             price, qty = b
             new_id = uuid.uuid4()
