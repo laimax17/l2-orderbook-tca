@@ -46,9 +46,55 @@ from decimal import Decimal
 
 from l2tca.book.types import BookView, Level, Side
 from l2tca.feed.messages import BookSnapshot, BookUpdate
+from sortedcontainers import SortedDict
+from collections import defaultdict
+import uuid
 
 __all__ = ["OrderBook"]
 
+class OrderNode:
+    def __init__(self, price: Decimal, qty: Decimal, type: str, id: int):
+        self.price = price
+        self.qty = qty
+        self.prev = None
+        self.next = None
+        self.type = type
+        self.id = id
+
+class OrderChain:
+    def __init__(self):
+        self.head = OrderNode(0,0,"head",0)
+        self.tail = OrderNode(0,0,"tail",0)
+        self.head.next = self.tail
+        self.tail.prev = self.head
+        self.size = 0
+        self.total_qty = 0
+
+    def get_first(self):
+        if self.size == 0:
+            raise ValueError("empty, cannot get first")
+        return self.head.next
+
+    def insert_node(self, node: OrderNode):
+        prev = self.tail.prev
+        prev.next = node
+        node.prev = prev
+        self.tail.prev = node
+        node.next = self.tail
+        self.size += 1
+        self.total_qty += node.qty
+
+    def pop_node(self, node: OrderNode):
+        if self.size == 0:
+            raise ValueError("empty, cannot pop node")
+        prev = node.prev
+        nxt = node.next
+        prev.next = nxt
+        nxt.prev = prev
+        node.prev = None
+        node.next = None
+        self.size -= 1
+        self.total_qty -= node.qty
 
 class OrderBook:
     """A single-symbol, depth-limited L2 book.
@@ -62,8 +108,9 @@ class OrderBook:
         self.symbol = symbol
         self.depth = depth
         self.seq = 0
-
-    # -- mutation ----------------------------------------------------------
+        self.orders = defaultdict(OrderNode)
+        self.asks = SortedDict()
+        self.bids = SortedDict()
 
     def apply_snapshot(self, snapshot: BookSnapshot) -> None:
         """Load a full book state.
@@ -77,8 +124,30 @@ class OrderBook:
             non-positive quantity). Is that something to absorb or to raise on?
           - How does ``seq`` relate to snapshots versus updates?
         """
-        raise NotImplementedError("core logic: implement by hand")
+        # raise NotImplementedError("core logic: implement by hand")
+        # snapshot_symbol = snapshot.symbol
+        snapshot_bids = snapshot.bids
+        snapshot_asks = snapshot.asks
 
+        for b in snapshot_bids:
+            price, qty = b
+            new_id = uuid.uuid4()
+            node = OrderNode(price, qty, "bid", new_id)
+            self.orders[new_id] = node
+            # if price not in self.bids:
+            self.bids[price] = OrderChain()
+            self.bids[price].insert_node(node)
+
+        for a in snapshot_asks:
+            price, qty = a
+            new_id = uuid.uuid4()
+            node = OrderNode(price, qty, "ask", new_id)
+            self.orders[new_id] = node
+            # if price not in self.asks:
+            self.asks[price] = OrderChain()
+            self.asks[price].insert_node(node)
+
+ 
     def apply_update(self, update: BookUpdate) -> None:
         """Apply one incremental frame: adds, modifies and deletes, mixed.
 
@@ -135,7 +204,36 @@ class OrderBook:
           - What comes back when a side holds fewer than ``n`` levels?
           - Callers keep these tuples. What does that require of what you return?
         """
-        raise NotImplementedError("core logic: implement by hand")
+        # raise NotImplementedError("core logic: implement by hand")
+        
+        # get top n bids
+        if len(self.bids) <= n:
+            top_bids = []
+            for x in self.bids:
+                top_bids.append(Level(x,self.bids[x].total_qty))
+            top_bids = top_bids[::-1]
+            top_bids = tuple(top_bids)
+        else:
+            top_bids = []
+            bids_keys = self.bids.keys()
+            for i in range(n):
+                top_bids.append(Level(bids_keys[-i],self.bids[bids_keys[-i]].total_qty))
+            top_bids = tuple(top_bids)
+
+        # get bottom n bids
+        if len(self.asks) <= n:
+            top_asks = []
+            for x in self.asks:
+                top_asks.append(Level(x,self.asks[x].total_qty))
+            top_asks = tuple(top_asks)
+        else:
+            top_asks = []
+            asks_keys = self.asks.keys()
+            for i in range(n):
+                top_asks.append(Level(asks_keys[-i],self.asks[asks_keys[-i]].total_qty))
+            top_asks = tuple(top_asks)
+
+        return (top_bids,top_asks)
 
     def view(
         self,

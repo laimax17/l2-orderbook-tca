@@ -9,6 +9,7 @@ dependencies = [
     "websockets>=13.0",
     "polars>=1.0",
     "pyarrow>=17.0",
+    "sortedcontainers>=2.4.0",
 ]
 
 [project.optional-dependencies]
