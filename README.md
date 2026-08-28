@@ -37,7 +37,7 @@ frontend, a database.
 ```bash
 uv sync                       # runtime + dev
 uv sync --all-extras          # adds matplotlib for the plots
-uv run pytest                 # infrastructure suite
+uv run pytest -m "not core"   # infrastructure suite -- green
 uv run ruff check .
 ```
 
@@ -112,13 +112,15 @@ the open design questions.
 they are red:
 
 ```bash
-uv run pytest -m core          # the development target: currently all failing
-uv run pytest                  # the infrastructure suite: green
+uv run pytest                  # 118 pass, 74 fail -- the 74 are the work
+uv run pytest -m core          # the core suite alone
+uv run pytest -m "not core"    # the infrastructure alone: green. What CI runs.
 ```
 
-The `core` marker is deselected by default, so a green default run means "the
-scaffolding still works" and a red `-m core` run means "there is still core to
-write". Implement a method, run the marked suite, and the tests tell you whether
+A bare `pytest` is red on purpose, and there is deliberately no marker filter in
+`addopts`: a filter there applies to every invocation, including the explicit
+node ids an IDE passes when you click a single test, which silently deselects it
+instead of running it. Implement a method, rerun, and the tests tell you whether
 you got it right.
 
 ## Results

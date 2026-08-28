@@ -9,8 +9,10 @@ a `BookView`, so neither can be validated against real data until the book
 produces one.
 
 ```bash
+uv run pytest                                 # 118 pass, 74 fail
 uv run pytest -m core                         # the whole development target
-uv run pytest -m core tests/test_order_book.py
+uv run pytest tests/test_order_book.py        # one file
+uv run pytest -m "not core"                   # the infrastructure alone: green
 ```
 
 The tests **do** contain answers — hard-coded expected values, as a red bar to
