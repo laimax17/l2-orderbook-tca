@@ -11,6 +11,10 @@ dependencies = [
     "pyarrow>=17.0",
 ]
 
+[project.optional-dependencies]
+# Plotting is optional so a capture host installs nothing it does not need.
+plot = ["matplotlib>=3.8"]
+
 [project.scripts]
 l2tca = "l2tca.cli:main"
 
@@ -19,6 +23,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
+    "matplotlib>=3.8",
 ]
 
 [build-system]
@@ -30,11 +35,14 @@ packages = ["src/l2tca"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Put the repo root on sys.path so the shared fixtures in tests/conftest.py can
-# be imported by name from the spec suites, however pytest was invoked.
 pythonpath = ["."]
 asyncio_mode = "auto"
-addopts = "-ra --strict-markers"
+markers = [
+    "core: exercises the hand-written core (book / signals / tca). These FAIL by design until the core is implemented -- they are the development target. Deselected by default; run them with `pytest -m core`.",
+]
+# Default run covers the infrastructure only, so a green bar means "the
+# scaffolding still works". The core suite is red on purpose and is opted into.
+addopts = "-ra --strict-markers -m 'not core'"
 filterwarnings = ["error::DeprecationWarning:l2tca.*"]
 
 [tool.ruff]

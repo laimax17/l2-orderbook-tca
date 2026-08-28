@@ -1,129 +1,124 @@
-"""Microstructure factors -- CORE LOGIC, INTENTIONALLY UNIMPLEMENTED.
+"""Microstructure signals. CORE LOGIC -- NOT IMPLEMENTED.
 
-Each function below raises :class:`NotImplementedError`; the docstring is its
-specification and ``tests/spec/test_signals_spec.py`` is the executable version.
+Each function raises :class:`NotImplementedError`. The docstrings give the
+mathematical definition and what the quantity means economically;
+``tests/test_microstructure.py`` pins the expected values and is currently red.
 
-All of them take a :class:`~l2tca.book.base.BookView`, which is an immutable
-copy, so they are pure functions of their input: same view in, same number out,
-every replay. Keep them that way -- a factor that reads a clock or mutates state
-cannot be tested against a recording.
+All four take a :class:`~l2tca.book.types.BookView`, which is an immutable copy,
+so they are pure functions of their input: same view in, same number out, every
+replay. Keep them that way -- a factor that reads a clock or carries state
+cannot be validated against a recording.
 
-Numeric convention: inputs are ``Decimal`` (exact prices), outputs are ``float``
-(research values). Convert once, at the end, so intermediate cancellation
-happens in exact arithmetic.
+Inputs are :class:`decimal.Decimal` (exact prices); outputs are ``float``
+(research values).
 
-Edge cases every one of these must handle rather than raise on: an empty side, a
-side thinner than the requested level count, and zero total quantity. Returning
-``float('nan')`` for "undefined here" is the convention used throughout, because
-it propagates through downstream arithmetic instead of silently reading as zero.
+Every one of these has inputs on which it is not defined -- an empty side, a
+zero total quantity, a zero mid. Decide what a caller gets in those cases, and
+be consistent across all four. Whatever you choose, note that ``0.0`` is also a
+legitimate result for several of these.
 """
 
 from __future__ import annotations
 
-from l2tca.book.base import BookView
+from decimal import Decimal
+
+from l2tca.book.types import BookView, Side
 
 __all__ = [
-    "book_pressure",
-    "depth_slope",
-    "log_depth_ratio",
+    "effective_spread",
     "micro_price",
     "order_book_imbalance",
-    "relative_spread_bps",
-    "weighted_mid",
+    "quoted_spread",
 ]
 
 
 def order_book_imbalance(view: BookView, levels: int = 1) -> float:
-    """Queue imbalance over the top ``levels``: ``(B - A) / (B + A)``.
+    r"""Queue imbalance over the top ``levels`` of each side.
 
-    ``B`` and ``A`` are the summed resting quantities on the bid and ask sides.
-    Ranges over ``[-1, +1]``: ``+1`` is all bid, ``-1`` is all ask.
+    .. math::
 
-    The workhorse short-horizon predictor of mid-price movement. At
-    ``levels=1`` it is the classic top-of-book imbalance; deeper sums are
-    smoother but respond later, and the level count is the parameter worth
-    sweeping against a recording.
+        I = \frac{Q_b - Q_a}{Q_b + Q_a}
 
-    Returns ``nan`` when both sides are empty or the total quantity is zero.
+    where :math:`Q_b` and :math:`Q_a` are the summed resting quantities on the
+    bid and ask sides over those levels. Bounded to :math:`[-1, +1]`.
+
+    Economic meaning: the relative pressure of resting buy interest against
+    resting sell interest. Because a marketable order consumes the opposite
+    side, a book that is heavy on the bid is one where the ask is easier to
+    exhaust, and the mid tends to move up. It is the standard short-horizon
+    predictor of the next mid change, and its predictive power falls off as
+    ``levels`` grows -- deeper quantity is less likely to trade and cheaper to
+    post, so it is both less informative and easier to fake.
     """
     raise NotImplementedError("core logic: implement by hand")
 
 
 def micro_price(view: BookView) -> float:
-    """Size-weighted best price: ``(P_b * Q_a + P_a * Q_b) / (Q_a + Q_b)``.
+    r"""Size-weighted best price.
 
-    Note the crossed weighting -- the *bid* price is weighted by the *ask*
-    quantity. The intuition: a large resting ask means the book is heavy on the
-    offer, so the next trade is likelier to be a sale into the bid, pulling the
-    fair price toward the bid. Weighting each price by its own quantity is the
-    common and wrong version, and it moves the estimate the wrong way.
+    .. math::
 
-    Reduces to the arithmetic mid when the two sizes are equal. Returns ``nan``
-    if either side is empty or both sizes are zero.
+        P_{micro} = \frac{P_b Q_a + P_a Q_b}{Q_a + Q_b}
+
+    Note the weighting: the bid *price* is weighted by the ask *quantity*, and
+    vice versa.
+
+    Economic meaning: an estimate of fair value that accounts for how the queue
+    is distributed, rather than splitting the spread blindly. The mid assumes
+    the next trade is equally likely on either side; the micro-price says the
+    thinner side is the one that gets consumed first, and leans the estimate
+    toward the price that side will reach. It reduces to the arithmetic mid
+    when the two sizes are equal.
     """
     raise NotImplementedError("core logic: implement by hand")
 
 
-def weighted_mid(view: BookView, levels: int = 5) -> float:
-    """Mid computed from quantity-weighted average prices over ``levels``.
+def quoted_spread(view: BookView, *, in_bps: bool = True) -> float:
+    r"""The advertised cost of an immediate round trip at the touch.
 
-    Take the quantity-weighted average price of the top ``levels`` bids and of
-    the top ``levels`` asks, then average the two. Less jumpy than the top-of-
-    book mid when the touch is thin, at the cost of reacting to depth that may
-    never trade.
+    .. math::
 
-    Returns ``nan`` if either side is empty.
+        S_{quoted} = P_a - P_b
+        \qquad\text{or, in basis points,}\qquad
+        10^4 \cdot \frac{P_a - P_b}{P_{mid}}
+
+    Economic meaning: what a liquidity taker pays to buy and immediately sell
+    one unit at the touch, and equivalently what a two-sided market maker earns
+    per round trip if the price does not move. It is a *quoted* cost -- the
+    price advertised for a trade of the size resting at the touch, and no
+    larger. Expressing it in basis points makes it comparable across price
+    regimes; the absolute number is not.
     """
     raise NotImplementedError("core logic: implement by hand")
 
 
-def relative_spread_bps(view: BookView) -> float:
-    """Quoted spread in basis points of the mid: ``1e4 * (P_a - P_b) / mid``.
+def effective_spread(
+    view: BookView,
+    fill_price: Decimal,
+    side: Side,
+    *,
+    in_bps: bool = True,
+) -> float:
+    r"""The spread a trade actually paid, measured against the contemporaneous mid.
 
-    Basis points rather than currency so the number is comparable across price
-    regimes -- a $10 spread on BTC at $20k and at $80k are different costs.
+    .. math::
 
-    Returns ``nan`` if either side is empty or the mid is zero.
-    """
-    raise NotImplementedError("core logic: implement by hand")
+        S_{eff} = 2 \cdot d \cdot (P_{fill} - P_{mid})
 
+    where :math:`d` is :math:`+1` for a buy and :math:`-1` for a sell, so the
+    result is positive when the trade paid away from the mid. The factor of two
+    makes it comparable to the quoted spread rather than to a half-spread.
 
-def book_pressure(view: BookView, levels: int = 10) -> float:
-    """Distance-discounted imbalance over the top ``levels``.
+    Economic meaning: the realised cost of one execution, as opposed to the
+    advertised one. It differs from the quoted spread in both directions and
+    each direction is informative -- narrower means the trade was filled inside
+    the touch, wider means it consumed more than the touch could supply.
+    Comparing effective against quoted across many fills is the standard
+    measure of whether an execution strategy is paying the advertised price.
 
-    Weight each level's quantity by ``1 / (1 + |price - mid| / mid)`` before
-    forming the same ``(B - A) / (B + A)`` ratio as
-    :func:`order_book_imbalance`. Quantity resting far from the touch is
-    unlikely to trade soon and is cheap to post, so counting it at face value
-    makes the raw imbalance easy to spoof; discounting by distance blunts that.
-
-    Returns ``nan`` when the mid is undefined or total weighted quantity is zero.
-    """
-    raise NotImplementedError("core logic: implement by hand")
-
-
-def depth_slope(view: BookView, side: str, levels: int = 10) -> float:
-    """Slope of cumulative quantity against price distance from the mid.
-
-    Fit ``cumulative_qty = slope * |price - mid|`` by ordinary least squares
-    through the origin over the top ``levels`` of ``side`` (``'bid'`` or
-    ``'ask'``). A steep slope means depth builds quickly away from the touch --
-    a resilient book. A flat one means a large order walks a long way.
-
-    Returns ``nan`` if the side has fewer than two levels or the mid is
-    undefined.
-    """
-    raise NotImplementedError("core logic: implement by hand")
-
-
-def log_depth_ratio(view: BookView, levels: int = 10) -> float:
-    """``log(B / A)`` over the top ``levels``.
-
-    The unbounded sibling of :func:`order_book_imbalance`. Symmetric around zero
-    and additive under quantity ratios, which makes it better behaved as a
-    regression input than the bounded ratio, whose variance collapses near the
-    extremes.
-
-    Returns ``nan`` if either side sums to zero.
+    ``view`` must be the book state contemporaneous with the fill. Which
+    instant that is -- and what "contemporaneous" means when book updates and
+    fills arrive on different paths -- is part of the TCA design work in
+    :mod:`l2tca.tca.analysis`.
     """
     raise NotImplementedError("core logic: implement by hand")

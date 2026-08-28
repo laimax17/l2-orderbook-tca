@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from l2tca.config import symbol_to_path_token
-from l2tca.feed.messages import BookLevel, BookSnapshot, BookUpdate, RawMessage, parse
+from l2tca.feed.messages import BookLevel, BookSnapshot, BookUpdate, RawMessage
+from l2tca.feed.parser import parse
 from l2tca.feed.replay import iter_raw_messages
 from l2tca.io.schema import SCHEMA_VERSION
 

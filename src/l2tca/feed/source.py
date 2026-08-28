@@ -9,12 +9,12 @@ makes offline development deterministic.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from l2tca.feed.messages import RawMessage
 
-__all__ = ["ControlEvent", "MessageSource"]
+__all__ = ["ControlEvent", "FeedStats", "MessageSource", "WebSocketLike"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,11 +26,34 @@ class ControlEvent:
     session and quietly invalidate any latency or staleness analysis run on it.
     """
 
-    event: str  # "connected" | "disconnected" | "reconnect" | "resubscribed"
+    event: str  # connected | subscribed | resubscribed | disconnected | reconnect | giving_up
     recv_ns: int
     recv_wall_ns: int
     attempt: int = 0
     detail: str = ""
+
+
+@dataclass(slots=True)
+class FeedStats:
+    """Counters worth looking at when a capture behaves oddly."""
+
+    messages: int = 0
+    bytes_in: int = 0
+    connects: int = 0
+    reconnects: int = 0
+    stale_timeouts: int = 0
+    last_recv_ns: int | None = None
+    control: list[ControlEvent] = field(default_factory=list)
+
+
+class WebSocketLike(Protocol):
+    """The slice of a WebSocket connection the client actually uses."""
+
+    async def send(self, message: str) -> None: ...
+
+    async def recv(self) -> str | bytes: ...
+
+    async def close(self) -> None: ...
 
 
 @runtime_checkable

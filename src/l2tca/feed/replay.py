@@ -1,27 +1,23 @@
 """Deterministic replay of a recorded session.
 
 Replay is the reason the recorder exists. Given the same file and the same
-arguments, ``ReplaySource`` yields exactly the same frames, in the same order,
-with the same timestamps -- so a book bug reproduces on demand and a signal
-change can be diffed against a fixed input.
+arguments, :class:`ReplaySource` yields exactly the same frames, in the same
+order, with the same timestamps -- so a book bug reproduces on demand and a
+signal change can be diffed against a fixed input.
 
 Pacing
 ------
 ``speed`` scales the *recorded* inter-arrival gaps, taken from the monotonic
 ``recv_ns`` stamps:
 
-* ``speed=1.0`` -- wall-clock faithful, for soak tests and dashboards.
-* ``speed=10.0`` -- ten times faster; a ten-minute capture in one minute.
-* ``speed=0`` or ``math.inf`` -- no sleeping at all. This is the default for
-  tests and benchmarks: it makes replay a pure function of the file.
+* ``1.0`` -- wall-clock faithful, for soak tests.
+* ``10.0`` -- ten times faster; a ten-minute capture in one minute.
+* ``0`` or ``math.inf`` -- no sleeping at all. The default for tests and
+  benchmarks: it makes replay a pure function of the file.
 
-Two knobs control the clock stamps themselves:
-
-* ``restamp=False`` (default) keeps the recorded ``recv_ns``/``recv_wall_ns``.
-  Downstream results then depend only on the file, which is what determinism
-  means here.
-* ``restamp=True`` re-stamps each frame at yield time. Use this only when
-  measuring the live path end to end, and never when comparing runs.
+``restamp=False`` (default) keeps the recorded clocks, so downstream results
+depend only on the file. ``restamp=True`` re-stamps at yield time; use it only
+when measuring the live path, never when comparing runs.
 """
 
 from __future__ import annotations
@@ -31,35 +27,20 @@ import json
 import math
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
 from l2tca.feed.messages import RawMessage
-from l2tca.feed.recorder import RECORDING_FORMAT_VERSION, RecordingHeader
+from l2tca.feed.records import RecordingFormatError, RecordingHeader, ReplayRecord, decode
 from l2tca.feed.source import ControlEvent
 
 __all__ = [
-    "ReplayRecord",
     "ReplaySource",
     "iter_raw_messages",
     "iter_records",
     "open_recording",
     "read_header",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class ReplayRecord:
-    """One decoded line: exactly one of the three fields is set."""
-
-    header: RecordingHeader | None = None
-    message: RawMessage | None = None
-    control: ControlEvent | None = None
-
-
-class RecordingFormatError(ValueError):
-    """The file is not a recording this build understands."""
 
 
 def open_recording(path: Path | str) -> IO[str]:
@@ -78,24 +59,17 @@ def read_header(path: Path | str) -> RecordingHeader | None:
             if not line:
                 continue
             obj = json.loads(line)
-            if obj.get("kind") == "header":
-                return RecordingHeader.from_dict(obj)
-            return None
+            return RecordingHeader.from_dict(obj) if obj.get("kind") == "header" else None
     return None
 
 
-def iter_records(
-    path: Path | str,
-    *,
-    strict: bool = False,
-) -> Iterator[ReplayRecord]:
+def iter_records(path: Path | str, *, strict: bool = False) -> Iterator[ReplayRecord]:
     """Decode a recording line by line.
 
     Args:
         strict: When ``True``, a line that does not decode raises. When ``False``
             (default) it is skipped -- a capture truncated by a hard kill ends in
-            a partial line, and losing the last frame is better than losing the
-            whole file.
+            a partial line, and losing the last frame beats losing the file.
     """
     with open_recording(path) as fh:
         for lineno, line in enumerate(fh, start=1):
@@ -103,8 +77,7 @@ def iter_records(
             if not line:
                 continue
             try:
-                obj = json.loads(line)
-                record = _decode(obj)
+                record = decode(json.loads(line))
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                 if strict:
                     raise RecordingFormatError(f"{path}:{lineno}: {exc}") from exc
@@ -113,48 +86,13 @@ def iter_records(
                 yield record
 
 
-def _decode(obj: dict[str, Any]) -> ReplayRecord | None:
-    kind = obj.get("kind")
-    if kind == "header":
-        header = RecordingHeader.from_dict(obj)
-        if header.v > RECORDING_FORMAT_VERSION:
-            raise RecordingFormatError(
-                f"recording format v{header.v} is newer than this build "
-                f"(v{RECORDING_FORMAT_VERSION})"
-            )
-        return ReplayRecord(header=header)
-    if kind == "msg":
-        return ReplayRecord(
-            message=RawMessage(
-                seq=int(obj["seq"]),
-                recv_ns=int(obj["recv_ns"]),
-                recv_wall_ns=int(obj["recv_wall_ns"]),
-                payload=obj["payload"],
-            )
-        )
-    if kind == "control":
-        return ReplayRecord(
-            control=ControlEvent(
-                event=str(obj["event"]),
-                recv_ns=int(obj["recv_ns"]),
-                recv_wall_ns=int(obj["recv_wall_ns"]),
-                attempt=int(obj.get("attempt", 0)),
-                detail=str(obj.get("detail", "")),
-            )
-        )
-    return None
-
-
 def iter_raw_messages(
-    path: Path | str,
-    *,
-    limit: int | None = None,
-    strict: bool = False,
+    path: Path | str, *, limit: int | None = None, strict: bool = False
 ) -> Iterator[RawMessage]:
     """Yield only the market-data frames, as fast as the disk allows.
 
-    This is the synchronous workhorse used by the Parquet converter and the
-    benchmark harness, where pacing would only add noise.
+    The synchronous workhorse used by the Parquet converter and the benchmark
+    harness, where pacing would only add noise.
     """
     emitted = 0
     for record in iter_records(path, strict=strict):
@@ -177,7 +115,6 @@ class ReplaySource:
         limit: int | None = None,
         restamp: bool = False,
         strict: bool = False,
-        include_control: bool = False,
         sleep: Callable[[float], Any] | None = None,
         on_control: Callable[[ControlEvent], None] | None = None,
     ) -> None:
@@ -188,7 +125,6 @@ class ReplaySource:
         self.limit = limit
         self.restamp = restamp
         self.strict = strict
-        self.include_control = include_control
         self._sleep = sleep
         self._on_control = on_control
         self._closed = False
@@ -223,10 +159,6 @@ class ReplaySource:
             if record.control is not None:
                 if self._on_control is not None:
                     self._on_control(record.control)
-                if not self.include_control:
-                    continue
-                # Control records carry no payload, so there is nothing to yield
-                # downstream; they exist to be observed via ``on_control``.
                 continue
 
             message = record.message
@@ -234,7 +166,7 @@ class ReplaySource:
 
             if self.paced and previous_recv_ns is not None:
                 gap_s = (message.recv_ns - previous_recv_ns) / 1e9 / self.speed
-                # A recording spanning a reconnect can contain a large gap, and a
+                # A capture spanning a reconnect can hold a large gap, and a
                 # non-monotonic one if the process restarted; clamp both ends.
                 if gap_s > 0:
                     await sleep(gap_s)
