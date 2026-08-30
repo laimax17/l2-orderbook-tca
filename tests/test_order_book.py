@@ -125,6 +125,40 @@ def test_an_update_that_would_cross_the_book_is_rejected() -> None:
         book.apply_update(update_frame([("105.0", "1")], []))
 
 
+def test_a_frame_that_moves_both_sides_is_applied() -> None:
+    """One frame carries both sides. The book only has to be uncrossed after it.
+
+    Kraken lifts the whole book in a single update: new bids that sit above the
+    *old* best ask, alongside the new asks that clear them. Judging each level
+    against the book as it stands mid-frame rejects a frame the exchange
+    published, and no amount of retrying will make it acceptable.
+    """
+    book = OrderBook("BTC/USD", depth=10)
+    book.apply_snapshot(snapshot_frame([("100.0", "1")], [("101.0", "1")]))
+
+    book.apply_update(update_frame([("102.0", "1"), ("100.0", "0")],
+                                   [("103.0", "1"), ("101.0", "0")]))
+
+    assert book.best_bid == (D("102.0"), D("1"))
+    assert book.best_ask == (D("103.0"), D("1"))
+
+
+def test_an_update_applies_when_the_opposite_side_is_empty() -> None:
+    """A one-sided book is a legal state, so an update to it must not raise."""
+    book = OrderBook("BTC/USD", depth=10)
+    book.apply_snapshot(snapshot_frame([("100.0", "1")], []))
+
+    book.apply_update(update_frame([("99.0", "5")], []))
+
+    bids, asks = book.depth_levels(10)
+    assert [b.price for b in bids] == [D("100.0"), D("99.0")]
+    assert asks == ()
+
+    # ...and the same in the other direction.
+    book.apply_update(update_frame([], [("101.0", "2")]))
+    assert book.best_ask == (D("101.0"), D("2"))
+
+
 def test_seq_counts_applied_frames() -> None:
     book = loaded_book()
     start = book.seq
@@ -202,6 +236,46 @@ def test_depth_levels_returns_what_exists_when_the_side_is_thin() -> None:
     bids, asks = loaded_book().depth_levels(50)
     assert len(bids) == 3
     assert len(asks) == 3
+
+
+def test_depth_levels_truncates_to_n_from_the_best_price() -> None:
+    """Both sides are truncated from the touch, which is at opposite ends.
+
+    ``bids`` descends and ``asks`` ascends, so "the best n" is the last n of one
+    ordering and the first n of the other. Taking them from the same end of both
+    yields the deepest bids and the deepest asks -- the exact opposite of what
+    every caller wants.
+    """
+    book = OrderBook("BTC/USD", depth=20)
+    book.apply_snapshot(
+        snapshot_frame(
+            [(f"{100 - i}.0", f"{i + 1}") for i in range(6)],
+            [(f"{101 + i}.0", f"{i + 1}") for i in range(6)],
+        )
+    )
+
+    bids, asks = book.depth_levels(3)
+    assert [b.price for b in bids] == [D("100.0"), D("99.0"), D("98.0")]
+    assert [a.price for a in asks] == [D("101.0"), D("102.0"), D("103.0")]
+    # Quantities travel with their own price, not with the position.
+    assert [b.qty for b in bids] == [D("1"), D("2"), D("3")]
+    assert [a.qty for a in asks] == [D("1"), D("2"), D("3")]
+
+
+def test_view_defaults_to_the_full_depth() -> None:
+    """``view()`` with no argument is the common call on the per-frame path."""
+    book = OrderBook("BTC/USD", depth=4)
+    book.apply_snapshot(
+        snapshot_frame(
+            [(f"{100 - i}.0", "1") for i in range(4)],
+            [(f"{101 + i}.0", "1") for i in range(4)],
+        )
+    )
+
+    full = book.view()
+    assert [b.price for b in full.bids] == [D("100.0"), D("99.0"), D("98.0"), D("97.0")]
+    assert [a.price for a in full.asks] == [D("101.0"), D("102.0"), D("103.0"), D("104.0")]
+    assert full.bids == book.view(4).bids
 
 
 def test_view_is_an_immutable_copy() -> None:
