@@ -33,10 +33,12 @@ from l2tca.feed.synthetic import synthetic_session
 from l2tca.tca.types import Fill, Order, Side
 
 __all__ = [
+    "FIXTURE_CANDIDATES",
     "FIXTURE_CAPTURE",
     "book_view",
     "capture_book_frames",
     "fill",
+    "fixture_capture",
     "iter_capture_frames",
     "levels",
     "order",
@@ -46,7 +48,21 @@ __all__ = [
     "write_capture",
 ]
 
-FIXTURE_CAPTURE = Path(__file__).parent / "fixtures" / "sample.jsonl"
+_FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+#: A committed capture activates the sample-backed tests. Gzip is accepted and
+#: preferred: book JSONL compresses about tenfold, and the recorder and replayer
+#: both handle ``.gz`` transparently.
+FIXTURE_CANDIDATES = (_FIXTURE_DIR / "sample.jsonl", _FIXTURE_DIR / "sample.jsonl.gz")
+
+
+def fixture_capture() -> Path | None:
+    """The committed sample capture, or ``None`` if none has been added yet."""
+    return next((p for p in FIXTURE_CANDIDATES if p.exists()), None)
+
+
+#: Kept for direct reference in skip messages.
+FIXTURE_CAPTURE = FIXTURE_CANDIDATES[0]
 
 PriceQty = tuple[str, str]
 

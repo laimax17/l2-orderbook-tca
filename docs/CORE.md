@@ -66,8 +66,8 @@ Open:
 
 Note that this is the only part of the project that cannot be proven against
 synthetic data: `l2tca synth` emits no checksum on purpose, because a fabricated
-one would validate a wrong implementation against itself. Record a real capture,
-trim it, and commit it to `tests/fixtures/sample.jsonl`.
+one would validate a wrong implementation against itself. See
+[Recording the test fixture](#recording-the-test-fixture) below.
 
 ## 3. `signals/microstructure.py` — four factors
 
@@ -122,3 +122,54 @@ lossless capture, deterministic replay, the Arrow schemas and hour-partitioned
 Parquet writer, the validating Polars readers, the latency harness, the plots,
 structured logging and the CLI. Reasoning for each is in the module docstrings
 and summarised in the README's design notes.
+
+
+---
+
+## Recording the test fixture
+
+Several tests skip until a real capture is committed:
+
+```
+SKIPPED  no recorded sample at tests/fixtures/sample.jsonl[.gz]
+```
+
+They skip rather than fail because a capture is data, not source -- it cannot be
+generated, only recorded from the live exchange. The synthetic generator covers
+the *shape* of the feed, but three things only a real capture can establish:
+
+* **Checksums.** Synthetic frames carry none, on purpose. This is the only way
+  to prove `verify_checksum` against something other than itself.
+* **Real depth behaviour.** Levels leaving and re-entering the depth window,
+  frames touching both sides at once, bursts and quiet periods.
+* **Real inter-arrival timing.** What the staleness watchdog and the benchmark
+  percentiles are actually tuned against.
+
+### How to record one
+
+```bash
+# 1. Capture ten minutes. Writes data/raw/kraken_book_BTC-USD_d100_<stamp>.jsonl
+uv run l2tca record --symbol BTC/USD --depth 100 --duration 600
+
+# 2. Check it looks sane -- frame mix, gaps, sequence continuity
+uv run l2tca inspect data/raw/kraken_book_BTC-USD_d100_*.jsonl
+
+# 3. Trim to a committable slice. `head` keeps the header and the opening
+#    snapshot, which is exactly what the tests need.
+head -n 5000 data/raw/kraken_book_BTC-USD_d100_*.jsonl > tests/fixtures/sample.jsonl
+
+# 4. Gzip it -- book JSONL compresses about tenfold, and both the recorder and
+#    the replayer handle .gz transparently.
+gzip tests/fixtures/sample.jsonl        # -> tests/fixtures/sample.jsonl.gz
+
+# 5. Confirm the skips turned into real runs
+uv run pytest -m "not core" -q          # the replay test should no longer skip
+uv run pytest -m core -q                # the checksum test now has real data
+```
+
+Aim for a fixture in the low single-digit megabytes compressed. It is committed
+source, so it should be small enough that nobody minds cloning it, and long
+enough to contain at least one full snapshot plus a few thousand updates.
+
+Keep the full ten-minute capture out of git -- `data/raw/` is already ignored --
+and use it for benchmarking, where more data is strictly better.

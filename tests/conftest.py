@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
-from tests.factories import FIXTURE_CAPTURE, synthetic_capture
+from tests.factories import fixture_capture, synthetic_capture
 
 from l2tca.config import FeedConfig
 
@@ -32,12 +32,13 @@ def sample_capture() -> Path:
     Skips otherwise. Drop a capture at ``tests/fixtures/sample.jsonl``
     (``l2tca record --duration 600``, trimmed) to activate these.
     """
-    if not FIXTURE_CAPTURE.exists():
+    path = fixture_capture()
+    if path is None:
         pytest.skip(
-            "no recorded sample at tests/fixtures/sample.jsonl -- "
-            "run `l2tca record` and commit a trimmed capture"
+            "no recorded sample at tests/fixtures/sample.jsonl[.gz] -- "
+            "run `l2tca record` and commit a trimmed capture (see docs/CORE.md)"
         )
-    return FIXTURE_CAPTURE
+    return path
 
 
 # -- wire fixtures ---------------------------------------------------------
