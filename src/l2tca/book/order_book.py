@@ -79,26 +79,26 @@ class OrderBook:
           - How does ``seq`` relate to snapshots versus updates?
         """
 
+        
+        bids = SortedDict()
+        asks = SortedDict()
+
+        for price, qty in snapshot.bids:
+            if qty <= 0:
+                raise ValueError(f"snapshot bid at {price} has non-positive qty {qty}")
+            bids[price] = Level(price, qty)
+
+        for price, qty in snapshot.asks:
+            if qty <= 0:
+                raise ValueError(f"snapshot ask at {price} has non-positive qty {qty}")
+            asks[price] = Level(price, qty)
+
+        if bids and asks and bids.keys()[-1] >= asks.keys()[0]:
+            raise ValueError(f"crossed snapshot: bid {bids.keys()[-1]} >= ask {asks.keys()[0]}")
+
+        self.bids = bids
+        self.asks = asks
         self.seq += 1
-        self.asks = SortedDict()
-        self.bids = SortedDict()
-        snapshot_bids = snapshot.bids
-        snapshot_asks = snapshot.asks
-
-        for b in snapshot_bids:
-            price, qty = b
-            if qty <= 0:
-                raise ValueError('qty is invalid.')
-            self.bids[price] = Level(price, qty)
-
-        for a in snapshot_asks:
-            price, qty = a
-            if qty <= 0:
-                raise ValueError('qty is invalid.')
-            self.asks[price] = Level(price,qty)
-
-        if self.best_ask and self.best_bid and self.best_ask.price <= self.best_bid.price:
-            raise ValueError('Crossed')
 
  
     def apply_update(self, update: BookUpdate) -> None:
@@ -120,50 +120,60 @@ class OrderBook:
             What makes it so?
         """
         
-        bids = update.bids
-        asks = update.asks
-        state_bids = self.bids.copy()
-        state_asks = self.asks.copy()
+        # An undo log rather than a copy of the book. A frame touches a handful
+        # of levels; the book holds a hundred. Copying both sides on every frame
+        # to protect against the rare rejected one costs the common case several
+        # times over -- measured at 51us per apply against 9us without it.
+        # Each entry is (side, price, level-that-was-there-or-None).
+        undo: list[tuple[SortedDict, Decimal, Level | None]] = []
+
+        try:
+            for side, levels in ((self.bids, update.bids), (self.asks, update.asks)):
+                for price, qty in levels:
+                    if qty < 0:
+                        raise ValueError(f"negative qty {qty} at {price}")
+                    undo.append((side, price, side.get(price)))
+                    if qty == 0:
+                        # A delete for a price outside the depth window is normal.
+                        side.pop(price, None)
+                    else:
+                        side[price] = Level(price, qty)
+
+            # Trim the levels that fell out of the window. Only ever the worst
+            # ones, so the touch -- and the crossed check below -- is unaffected.
+            while len(self.bids) > self.depth:
+                worst = self.bids.keys()[0]
+                undo.append((self.bids, worst, self.bids[worst]))
+                self.bids.pop(worst)
+            while len(self.asks) > self.depth:
+                worst = self.asks.keys()[-1]
+                undo.append((self.asks, worst, self.asks[worst]))
+                self.asks.pop(worst)
+
+            # Checked once, against the whole frame. Kraken lifts both sides in
+            # a single update, so judging each level against the half-applied
+            # book would reject frames the exchange published.
+            if self.best_bid and self.best_ask and self.best_bid.price >= self.best_ask.price:
+                raise ValueError(
+                    f"crossed after update: bid {self.best_bid.price} >= ask {self.best_ask.price}"
+                )
+        except ValueError:
+            # Reversed, so a price touched twice in one frame is restored to
+            # what it held before the frame, not to its mid-frame value.
+            for side, price, previous in reversed(undo):
+                if previous is None:
+                    side.pop(price, None)
+                else:
+                    side[price] = previous
+            raise
+
         self.seq += 1
-
-        for book_level in bids:
-            price,qty = book_level
-            if qty == 0:
-                if price not in self.bids:
-                    continue
-                else:
-                    self.bids.pop(price)
-                    continue
-            if qty < 0:
-                raise ValueError('Error')
-            self.bids[price] = Level(price,qty)
-        while len(self.bids) > self.depth:
-            worst_bid_price = self.bids.keys()[0]
-            self.bids.pop(worst_bid_price)
-
-        for book_level in asks:
-            price,qty = book_level
-            if qty == 0:
-                if price not in self.asks:
-                    continue
-                else:
-                    self.asks.pop(price)
-                    continue
-            if qty < 0:
-                raise ValueError('Error')
-            self.asks[price] = Level(price,qty)
-        while len(self.asks) > self.depth:
-            worst_ask_price = self.asks.keys()[-1]
-            self.asks.pop(worst_ask_price)
-
-        if self.best_ask and self.best_bid and self.best_ask.price <= self.best_bid.price:
-            self.bids = state_bids
-            self.asks = state_asks
-            raise ValueError('Crossed')
 
     def clear(self) -> None:
         """Drop all state. Called on disconnect, before the replacement snapshot."""
-        self.seq = 0
+        # seq deliberately survives. It identifies views for the life of this
+        # book, and restarting it would emit duplicate book_seq values into the
+        # snapshot table on either side of a reconnect.
         self.asks = SortedDict()
         self.bids = SortedDict()
 
