@@ -52,49 +52,6 @@ import uuid
 
 __all__ = ["OrderBook"]
 
-class OrderNode:
-    def __init__(self, price: Decimal, qty: Decimal, type: str, id: int):
-        self.price = price
-        self.qty = qty
-        self.prev = None
-        self.next = None
-        self.type = type
-        self.id = id
-
-class OrderChain:
-    def __init__(self):
-        self.head = OrderNode(0,0,"head",0)
-        self.tail = OrderNode(0,0,"tail",0)
-        self.head.next = self.tail
-        self.tail.prev = self.head
-        self.size = 0
-        self.total_qty = 0
-
-    def get_first(self):
-        if self.size == 0:
-            raise ValueError("empty, cannot get first")
-        return self.head.next
-
-    def insert_node(self, node: OrderNode):
-        prev = self.tail.prev
-        prev.next = node
-        node.prev = prev
-        self.tail.prev = node
-        node.next = self.tail
-        self.size += 1
-        self.total_qty += node.qty
-
-    def pop_node(self, node: OrderNode):
-        if self.size == 0:
-            raise ValueError("empty, cannot pop node")
-        prev = node.prev
-        nxt = node.next
-        prev.next = nxt
-        nxt.prev = prev
-        node.prev = None
-        node.next = None
-        self.size -= 1
-        self.total_qty -= node.qty
 
 class OrderBook:
     """A single-symbol, depth-limited L2 book.
@@ -108,7 +65,6 @@ class OrderBook:
         self.symbol = symbol
         self.depth = depth
         self.seq = 0
-        self.orders = defaultdict(OrderNode)
         self.asks = SortedDict()
         self.bids = SortedDict()
 
@@ -125,8 +81,7 @@ class OrderBook:
           - How does ``seq`` relate to snapshots versus updates?
         """
 
-        self.seq = 0
-        self.orders = defaultdict(OrderNode)
+        self.seq += 1
         self.asks = SortedDict()
         self.bids = SortedDict()
         snapshot_bids = snapshot.bids
@@ -136,23 +91,15 @@ class OrderBook:
             price, qty = b
             if qty <= 0:
                 raise ValueError('qty is invalid.')
-            new_id = uuid.uuid4()
-            node = OrderNode(price, qty, "bid", new_id)
-            self.orders[new_id] = node
-            self.bids[price] = OrderChain()
-            self.bids[price].insert_node(node)
+            self.bids[price] = Level(price, qty)
 
         for a in snapshot_asks:
             price, qty = a
             if qty <= 0:
                 raise ValueError('qty is invalid.')
-            new_id = uuid.uuid4()
-            node = OrderNode(price, qty, "ask", new_id)
-            self.orders[new_id] = node
-            self.asks[price] = OrderChain()
-            self.asks[price].insert_node(node)
+            self.asks[price] = Level(price,qty)
 
-        if self.best_ask.price <= self.best_bid.price:
+        if self.best_ask and self.best_bid and self.best_ask.price <= self.best_bid.price:
             raise ValueError('Crossed')
 
  
@@ -174,12 +121,48 @@ class OrderBook:
           - After the frame is applied, is the book still bounded by ``depth``?
             What makes it so?
         """
-        raise NotImplementedError("core logic: implement by hand")
+        bids = update.bids
+        asks = update.asks
+        self.seq += 1
+
+        for book_level in bids:
+            price,qty = book_level
+            if price >= self.best_ask.price:
+                raise ValueError("Crossed bid price")
+            if qty == 0:
+                if price not in self.bids:
+                    continue
+                else:
+                    self.bids.pop(price)
+                    continue
+            if qty < 0:
+                raise ValueError('Error')
+            self.bids[price] = Level(price,qty)
+            if len(self.bids) > self.depth:
+                worst_bid_price = self.bids.keys()[0]
+                self.bids.pop(worst_bid_price)
+
+        for book_level in asks:
+            price,qty = book_level
+            if price <= self.best_bid.price:
+                raise ValueError("Crossed ask price")
+            if qty == 0:
+                if price not in self.asks:
+                    continue
+                else:
+                    self.asks.pop(price)
+                    continue
+            if qty < 0:
+                raise ValueError('Error')
+            self.asks[price] = Level(price,qty)
+            if len(self.asks) > self.depth:
+                worst_ask_price = self.asks.keys()[-1]
+                self.asks.pop(worst_ask_price)
+
 
     def clear(self) -> None:
         """Drop all state. Called on disconnect, before the replacement snapshot."""
         self.seq = 0
-        self.orders = defaultdict(OrderNode)
         self.asks = SortedDict()
         self.bids = SortedDict()
 
@@ -191,31 +174,29 @@ class OrderBook:
         if not self.bids:
             return None
         price = self.bids.keys()[-1]
-        return Level(price, self.bids[price].get_first().qty)
-
+        return self.bids[price]
+    
     @property
     def best_ask(self) -> Level | None:
         """Lowest resting ask, or ``None`` on an empty side. Target: O(1)."""
         if not self.asks:
             return None
         price = self.asks.keys()[0]
-        return Level(price, self.asks[price].get_first().qty)
-
+        return self.asks[price]
+    
     @property
     def mid(self) -> Decimal | None:
         """Mid price, or ``None`` when it is not defined.
 
         Question: when is it not defined, and what should the caller get then?
         """
-        # raise NotImplementedError("core logic: implement by hand")
-        if self.bids and self.asks:
+        if len(self.bids) > 0 and len(self.asks) > 0:
             return (self.best_bid.price + self.best_ask.price) / 2
         return None
 
     @property
     def spread(self) -> Decimal | None:
         """Quoted spread, or ``None`` when it is not defined."""
-        # raise NotImplementedError("core logic: implement by hand")
         if self.bids and self.asks:
             return (self.best_ask.price - self.best_bid.price)
         return None
@@ -227,33 +208,32 @@ class OrderBook:
           - What comes back when a side holds fewer than ``n`` levels?
           - Callers keep these tuples. What does that require of what you return?
         """
-        # raise NotImplementedError("core logic: implement by hand")
         
         # get top n bids
         if len(self.bids) <= n:
             top_bids = []
             for x in self.bids:
-                top_bids.append(Level(x,self.bids[x].total_qty))
+                top_bids.append(Level(x,self.bids[x].qty))
             top_bids = top_bids[::-1]
             top_bids = tuple(top_bids)
         else:
             top_bids = []
             bids_keys = self.bids.keys()
             for i in range(n):
-                top_bids.append(Level(bids_keys[-i],self.bids[bids_keys[-i]].total_qty))
+                top_bids.append(Level(bids_keys[-i],self.bids[bids_keys[-i]].qty))
             top_bids = tuple(top_bids)
 
         # get bottom n bids
         if len(self.asks) <= n:
             top_asks = []
             for x in self.asks:
-                top_asks.append(Level(x,self.asks[x].total_qty))
+                top_asks.append(Level(x,self.asks[x].qty))
             top_asks = tuple(top_asks)
         else:
             top_asks = []
             asks_keys = self.asks.keys()
             for i in range(n):
-                top_asks.append(Level(asks_keys[-i],self.asks[asks_keys[-i]].total_qty))
+                top_asks.append(Level(asks_keys[-i],self.asks[asks_keys[-i]].qty))
             top_asks = tuple(top_asks)
 
         return (top_bids,top_asks)
@@ -281,7 +261,7 @@ class OrderBook:
             recv_ns = recv_ns,
             recv_wall_ns = recv_wall_ns,
             exchange_ts_ns = exchange_ts_ns,
-            checksum_ok = True,
+            checksum_ok = checksum_ok,
             bids = bids,
             asks = asks
         )
@@ -293,12 +273,10 @@ class OrderBook:
 
         Question: what does "or better" mean on each side?
         """
-        # raise NotImplementedError("core logic: implement by hand")
+
         if side == Side.BID:
-            # raise NotImplementedError()
-            return sum(self.bids[p].total_qty for p in self.bids.keys() if p >= price)
+            return sum(self.bids[p].qty for p in self.bids.keys() if p >= price)
         elif side == Side.ASK:
-            # raise NotImplementedError()
-            return sum(self.asks[p].total_qty for p in self.asks.keys() if p <= price)
+            return sum(self.asks[p].qty for p in self.asks.keys() if p <= price)
         else:
             raise ValueError("Invalid Side value")
