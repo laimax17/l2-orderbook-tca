@@ -157,6 +157,9 @@ class SequenceTracker:
         self.depth = depth
         self.price_precision = price_precision
         self.qty_precision = qty_precision
+        self.book = OrderBook(symbol,depth)
+        self.state = State('disconnected')
+        self.seq_buffer = []
 
     def on_snapshot(self, snapshot: BookSnapshot) -> None:
         """Handle an arriving snapshot.
@@ -166,7 +169,9 @@ class SequenceTracker:
             Are those the same case?
           - What happens to anything buffered while it was in flight?
         """
-        raise NotImplementedError("core logic: implement by hand")
+        self.book.apply_snapshot(snapshot)
+        self.state = State('live')
+        self.seq_buffer = []
 
     def on_update(self, update: BookUpdate) -> bool:
         """Apply an update, and report whether the book can still be trusted.
@@ -179,11 +184,36 @@ class SequenceTracker:
             is left in either way.
           - What happens on the frame *after* the answer was ``False``?
         """
-        raise NotImplementedError("core logic: implement by hand")
+        # raise NotImplementedError("core logic: implement by hand")
+        if self.state != State('live'):
+            return False
+        
+        try:
+            self.book.apply_update(update)
+        except ValueError:
+            raise ValueError("apply update failed")
+
+        if not update.checksum:
+            return True
+        
+        result = verify_checksum(
+            bids=self.book.bids,
+            asks=self.book.asks,
+            expected=update.checksum,
+            price_precision=self.price_precision,
+            qty_precision=self.qty_precision
+        )
+        if result:
+            self.state = State('live')
+        else:
+            self.state = State('disconnected')
+        return result
+
 
     def on_disconnect(self) -> None:
         """Handle the transport going away."""
-        raise NotImplementedError("core logic: implement by hand")
+        # raise NotImplementedError("core logic: implement by hand")
+        self.state = State('disconnected')
 
     def needs_resync(self) -> bool:
         """Whether a fresh snapshot should be requested now.
@@ -191,7 +221,10 @@ class SequenceTracker:
         Question: who acts on this -- the feed client, the book, or something
         that owns both? What does that imply about where this class sits?
         """
-        raise NotImplementedError("core logic: implement by hand")
+        # raise NotImplementedError("core logic: implement by hand")
+        if self.state == State('disconnected'):
+            return True
+        return False
 
     def buffer(self, update: BookUpdate) -> None:
         """Hold an update that arrived while a resync was in flight.
@@ -207,11 +240,16 @@ class SequenceTracker:
         Folding that decision inward is a defensible alternative; it would change
         this signature and its tests.
         """
-        raise NotImplementedError("core logic: implement by hand")
+        # raise NotImplementedError("core logic: implement by hand")
+        self.state = State('resyncing')
+        self.seq_buffer.append(update)
 
     def drain(self) -> list[BookUpdate]:
         """Return the buffered updates that should now be applied, in order."""
-        raise NotImplementedError("core logic: implement by hand")
+        # raise NotImplementedError("core logic: implement by hand")
+        res = self.seq_buffer
+        self.seq_buffer = []
+        return res
 
 
 def _render(value: Decimal, places: int) -> str:
@@ -268,10 +306,10 @@ def checksum_payload(
 
     def side(levels: Iterable[Level]) -> str:
         return "".join(
-            _render(level.price, price_precision) + _render(level.qty, qty_precision)
-            for level in islice(levels, CHECKSUM_LEVELS)
+            _render(levels[p].price, price_precision) + _render(levels[p].qty, qty_precision)
+            for p in islice(levels, CHECKSUM_LEVELS)
         )
-
+    print(bids)
     return side(asks) + side(bids)
 
 

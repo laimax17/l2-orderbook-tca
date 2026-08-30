@@ -47,8 +47,6 @@ from decimal import Decimal
 from l2tca.book.types import BookView, Level, Side
 from l2tca.feed.messages import BookSnapshot, BookUpdate
 from sortedcontainers import SortedDict
-from collections import defaultdict
-import uuid
 
 __all__ = ["OrderBook"]
 
