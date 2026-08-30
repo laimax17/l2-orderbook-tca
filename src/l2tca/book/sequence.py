@@ -195,10 +195,11 @@ class SequenceTracker:
 
         if not update.checksum:
             return True
-        
+        n = self.book.depth
+        bids,asks = self.book.depth_levels(n)
         result = verify_checksum(
-            bids=self.book.bids,
-            asks=self.book.asks,
+            bids=bids,
+            asks=asks,
             expected=update.checksum,
             price_precision=self.price_precision,
             qty_precision=self.qty_precision
@@ -303,13 +304,13 @@ def checksum_payload(
             and immediate signal.
         qty_precision: The pair's quantity decimals (``lot_decimals``).
     """
-
+    
     def side(levels: Iterable[Level]) -> str:
         return "".join(
-            _render(levels[p].price, price_precision) + _render(levels[p].qty, qty_precision)
-            for p in islice(levels, CHECKSUM_LEVELS)
+            _render(level.price, price_precision) + _render(level.qty, qty_precision)
+            for level in islice(levels, CHECKSUM_LEVELS)
         )
-    print(bids)
+
     return side(asks) + side(bids)
 
 

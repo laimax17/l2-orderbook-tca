@@ -197,7 +197,7 @@ class OrderBook:
             return (self.best_ask.price - self.best_bid.price)
         return None
     
-    def depth_levels(self, n: int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
+    def depth_levels(self, n:int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
         """Top ``n`` levels per side, best first, as ``(bids, asks)``.
 
         Questions:
