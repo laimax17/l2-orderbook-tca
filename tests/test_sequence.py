@@ -136,6 +136,28 @@ def test_the_checksum_depends_on_the_book() -> None:
     )
 
 
+def test_a_clean_capture_never_forces_a_resync(sample_capture: Path) -> None:
+    """The strongest check available on the tracker as a whole.
+
+    The committed capture was recorded with no reconnects and every one of its
+    checksums verifies, so a correct tracker applies every frame and never asks
+    for a fresh snapshot. A rejection here is a real defect, and it could be in
+    any of three places -- the tracker, the checksum, or the book underneath --
+    which is exactly why it is worth running.
+
+    Unlike the unit tests above, this one cannot be satisfied by a tracker that
+    guesses: rejecting nothing and rejecting everything both fail it, the first
+    only if the frames genuinely diverge.
+    """
+    snapshots, updates = capture_book_frames(sample_capture)
+    tracker = SequenceTracker("BTC/USD", depth=100)
+    tracker.on_snapshot(snapshots[0])
+
+    rejected = [u for u in updates if not tracker.on_update(u)]
+    assert not rejected, f"{len(rejected)} of {len(updates)} frames were rejected"
+    assert tracker.needs_resync() is False
+
+
 def test_checksums_verify_against_a_real_capture(sample_capture: Path) -> None:
     """The authoritative test. Skips until a recorded sample is committed.
 

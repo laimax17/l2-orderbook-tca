@@ -68,8 +68,8 @@ import zlib
 from collections.abc import Iterable
 from decimal import Decimal
 from itertools import islice
+from l2tca.book.order_book import OrderBook
 
-from l2tca.book.types import Level
 
 __all__ = [
     "CHECKSUM_LEVELS",
@@ -103,14 +103,60 @@ class SequenceTracker:
 
     Kraken's v2 ``book`` channel does **not** carry a per-frame sequence number
     the way some venues do -- there is no monotonically increasing update id to
-    compare against. Establish what plays that role here before writing anything
-    else in this class, because every method below depends on the answer.
+    compare against. What plays that role here is the per-frame ``checksum``.
+
+    **This class holds its own** :class:`~l2tca.book.order_book.OrderBook`.
+    That is forced rather than chosen: verifying a checksum needs the book state
+    a frame produces, and nothing hands this class a book -- hence ``symbol``
+    and ``depth``, which are exactly what the book's constructor takes. It makes
+    the tracker the component that owns both, so a book that is not trusted
+    cannot be read past it.
+
+    Settled by the tests, so not worth relitigating:
+      - the tracker applies frames, rather than advising a caller to;
+      - a snapshot is unconditionally authoritative and clears the buffer.
+
+    Still open, and the substance of this module:
+      - which states are worth distinguishing, and what each one tells the
+        component that owns this tracker to do next;
+      - which of the conditions listed at the top of this file move the machine,
+        and which merely produce an answer;
+      - what a single checksum mismatch means versus several in a row.
+
+    Not provided here, deliberately -- both are design calls, and neither breaks
+    an existing test if you add it:
+      - **no way to read the book.** Nothing downstream can obtain a view. A
+        property, a ``view()`` passthrough, or an accessor that refuses while
+        untrusted are all defensible, and they differ in what they let a caller
+        get away with.
+      - **no ``on_connect()``.** Without one, "the connection opened" from the
+        checklist has no entry point, and a disconnected tracker cannot be told
+        apart from one that is merely waiting for its first snapshot.
+
+    The signatures below are a proposal, not a constraint. They encode one
+    coherent design; changing them along with their tests is a legitimate move,
+    and the reasoning behind such a change is worth writing down.
     """
 
-    def __init__(self, symbol: str, depth: int = 100) -> None:
+    def __init__(
+        self,
+        symbol: str,
+        depth: int = 100,
+        *,
+        price_precision: int = 1,
+        qty_precision: int = 8,
+    ) -> None:
+        """
+        Args:
+            price_precision: The pair's price decimals, needed to verify a
+                checksum. Defaults are BTC/USD's; see
+                :func:`checksum_payload` for where real values come from.
+            qty_precision: The pair's quantity decimals.
+        """
         self.symbol = symbol
         self.depth = depth
-        self.state = State('disconneted')
+        self.price_precision = price_precision
+        self.qty_precision = qty_precision
 
     def on_snapshot(self, snapshot: BookSnapshot) -> None:
         """Handle an arriving snapshot.
@@ -123,11 +169,15 @@ class SequenceTracker:
         raise NotImplementedError("core logic: implement by hand")
 
     def on_update(self, update: BookUpdate) -> bool:
-        """Handle an arriving update. Returns whether the caller should apply it.
+        """Apply an update, and report whether the book can still be trusted.
 
         Questions:
-          - What are the possible answers here besides "apply" and "drop"?
-          - What does the caller need to know that a bool cannot carry?
+          - A frame may carry no checksum at all. Applied, but unverifiable --
+            what should the answer be, and what does that cost you?
+          - The book may refuse the frame outright. Is that the same situation
+            as a checksum mismatch, or a different one? Note what state the book
+            is left in either way.
+          - What happens on the frame *after* the answer was ``False``?
         """
         raise NotImplementedError("core logic: implement by hand")
 
@@ -150,6 +200,12 @@ class SequenceTracker:
           - Is the buffer bounded? What happens when it fills?
           - When the snapshot lands, which buffered frames are still relevant?
             What decides that, given the note about sequence numbers above?
+
+        Note that as signed, the decision to buffer rather than apply sits with
+        the *caller*: :meth:`on_update` reports that a frame was not applied, and
+        something outside has to route it here -- using state this class owns.
+        Folding that decision inward is a defensible alternative; it would change
+        this signature and its tests.
         """
         raise NotImplementedError("core logic: implement by hand")
 
