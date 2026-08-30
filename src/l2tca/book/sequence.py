@@ -63,12 +63,23 @@ from collections.abc import Iterable
 
 from l2tca.book.types import Level
 from l2tca.feed.messages import BookSnapshot, BookUpdate
+from enum import StrEnum
 
 __all__ = ["SequenceTracker", "verify_checksum"]
 
 # No state type is declared here. Settle the states from the checklist above
 # first; the right shape for them (enum, plain strings, something with data
 # attached) falls out of that and not before.
+#   - disconnected      no socket
+#   - awaiting_snapshot subscribed, no authoritative book yet
+#   - live              book is trusted, updates applied directly
+#   - resyncing         book is known bad, a replacement snapshot is pending
+
+class State(StrEnum):
+    DISCONNECTED = "disconnected"
+    AWAIT_SNAPSHOT = 'await_snapshot'
+    LIVE = 'live'
+    RESYNCING = 'resyncing'
 
 
 class SequenceTracker:
