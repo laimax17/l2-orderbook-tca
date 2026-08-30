@@ -190,11 +190,13 @@ class SequenceTracker:
         
         try:
             self.book.apply_update(update)
-        except ValueError:
-            raise ValueError("apply update failed")
+        except ValueError as e:
+            raise ValueError("apply update failed: ", e)
 
         if not update.checksum:
             return True
+        if update.checksum == 0:
+            return False
         n = self.book.depth
         bids,asks = self.book.depth_levels(n)
         result = verify_checksum(
