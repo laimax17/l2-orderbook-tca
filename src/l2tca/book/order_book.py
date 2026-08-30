@@ -122,8 +122,8 @@ class OrderBook:
         
         bids = update.bids
         asks = update.asks
-        state_bids = bids.copy()
-        state_asks = asks.copy()
+        state_bids = self.bids.copy()
+        state_asks = self.asks.copy()
         self.seq += 1
 
         for book_level in bids:
@@ -163,7 +163,7 @@ class OrderBook:
 
     def clear(self) -> None:
         """Drop all state. Called on disconnect, before the replacement snapshot."""
-        self.seq += 1 
+        self.seq = 0
         self.asks = SortedDict()
         self.bids = SortedDict()
 
