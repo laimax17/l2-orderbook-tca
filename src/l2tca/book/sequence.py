@@ -64,8 +64,24 @@ from collections.abc import Iterable
 from l2tca.book.types import Level
 from l2tca.feed.messages import BookSnapshot, BookUpdate
 from enum import StrEnum
+import zlib
+from collections.abc import Iterable
+from decimal import Decimal
+from itertools import islice
 
-__all__ = ["SequenceTracker", "verify_checksum"]
+from l2tca.book.types import Level
+
+__all__ = [
+    "CHECKSUM_LEVELS",
+    "SequenceTracker",
+    "book_checksum",
+    "checksum_payload",
+    "verify_checksum",
+]
+
+#: Kraken's checksum covers this many levels from the top of each side. A book
+#: that is right at the touch and wrong at level 50 therefore passes.
+CHECKSUM_LEVELS = 10
 
 # No state type is declared here. Settle the states from the checklist above
 # first; the right shape for them (enum, plain strings, something with data
@@ -94,6 +110,7 @@ class SequenceTracker:
     def __init__(self, symbol: str, depth: int = 100) -> None:
         self.symbol = symbol
         self.depth = depth
+        self.state = State('disconneted')
 
     def on_snapshot(self, snapshot: BookSnapshot) -> None:
         """Handle an arriving snapshot.
@@ -141,6 +158,82 @@ class SequenceTracker:
         raise NotImplementedError("core logic: implement by hand")
 
 
+def _render(value: Decimal, places: int) -> str:
+    """Render one number the way the checksum string expects it.
+
+    Fixed point at exactly ``places`` decimals, decimal point removed, then
+    leading zeros stripped::
+
+        78027.2    at 1 place  -> "78027.2"    -> "780272"   -> "780272"
+        0.57296429 at 8 places -> "0.57296429" -> "057296429" -> "57296429"
+
+    Two traps live in this one line.
+
+    *Never let the number reach exponent notation.* ``str(Decimal("1E-7"))`` is
+    ``"1E-7"``, and hashing that gives a number the exchange has never seen.
+    Formatting with an explicit ``.Nf`` keeps it fixed-point at any magnitude.
+
+    *Leading zeros are stripped from the concatenated digits, not from the
+    original.* A price below one loses the zero that was in front of its decimal
+    point, which is why ``0.5`` at 5 places is ``50000`` and not ``050000``.
+    Trailing zeros stay: they carry the precision, which is the whole point of
+    padding to a fixed width first.
+    """
+    return f"{value:.{places}f}".replace(".", "").lstrip("0")
+
+
+def checksum_payload(
+    bids: Iterable[Level],
+    asks: Iterable[Level],
+    price_precision: int,
+    qty_precision: int,
+) -> str:
+    """The exact ASCII string Kraken computes its CRC32 over.
+
+    Asks first, then bids; within a side, each level contributes its price
+    digits followed by its quantity digits; at most :data:`CHECKSUM_LEVELS`
+    levels per side, best-first.
+
+    Exposed separately from :func:`book_checksum` because a mismatch is
+    otherwise undebuggable -- CRC32 tells you the two strings differ and nothing
+    else. Print this against the same construction done by hand and the
+    disagreement is visible in one glance.
+
+    Args:
+        bids: Best-first (descending price). ``asks`` best-first (ascending).
+        price_precision: The pair's price decimals -- ``pair_decimals`` from
+            Kraken's ``AssetPairs``, or the ``instrument`` channel. Not derivable
+            from book frames: a level that happens to end in a zero is rendered
+            with that zero, so a frame alone cannot tell you the declared width.
+            Get this wrong and *every* checksum fails, which is at least a loud
+            and immediate signal.
+        qty_precision: The pair's quantity decimals (``lot_decimals``).
+    """
+
+    def side(levels: Iterable[Level]) -> str:
+        return "".join(
+            _render(level.price, price_precision) + _render(level.qty, qty_precision)
+            for level in islice(levels, CHECKSUM_LEVELS)
+        )
+
+    return side(asks) + side(bids)
+
+
+def book_checksum(
+    bids: Iterable[Level],
+    asks: Iterable[Level],
+    price_precision: int,
+    qty_precision: int,
+) -> int:
+    """CRC32 of :func:`checksum_payload`, as an unsigned 32-bit integer.
+
+    ``zlib.crc32`` already returns unsigned on Python 3, so the value compares
+    directly against the ``checksum`` field on the frame.
+    """
+    payload = checksum_payload(bids, asks, price_precision, qty_precision)
+    return zlib.crc32(payload.encode("ascii"))
+
+
 def verify_checksum(
     bids: Iterable[Level],
     asks: Iterable[Level],
@@ -148,10 +241,16 @@ def verify_checksum(
     price_precision: int,
     qty_precision: int,
 ) -> bool:
-    """Recompute Kraken's book checksum and compare it to ``expected``.
+    """Whether the local book agrees with the exchange's own statement of it.
 
-    See the module docstring for what the field is and the questions this has to
-    answer. Kraken's API documentation specifies the construction exactly --
-    read it there rather than inferring it from a capture.
+    Call this *after* applying a frame, against the book that frame produced,
+    with the ``checksum`` that frame carried. ``True`` means the two books match
+    at the top; ``False`` means they have diverged and the local one cannot be
+    repaired from local information -- only a fresh snapshot fixes it.
+
+    Args:
+        bids: The local book's best ``CHECKSUM_LEVELS`` bids, best-first.
+        asks: The local book's best ``CHECKSUM_LEVELS`` asks, best-first.
+        expected: The frame's ``checksum`` field.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    return book_checksum(bids, asks, price_precision, qty_precision) == expected

@@ -251,7 +251,7 @@ class OrderBook:
         book. On the per-frame path, so its cost is part of the representation
         question above.
         """
-        if not n:
+        if n == None:
             n = self.depth
         bids, asks = self.depth_levels(n)
 
