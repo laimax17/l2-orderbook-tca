@@ -119,8 +119,11 @@ class OrderBook:
           - After the frame is applied, is the book still bounded by ``depth``?
             What makes it so?
         """
+        
         bids = update.bids
         asks = update.asks
+        state_bids = bids.copy()
+        state_asks = asks.copy()
         self.seq += 1
 
         for book_level in bids:
@@ -154,11 +157,13 @@ class OrderBook:
             self.asks.pop(worst_ask_price)
 
         if self.best_ask and self.best_bid and self.best_ask.price <= self.best_bid.price:
+            self.bids = state_bids
+            self.asks = state_asks
             raise ValueError('Crossed')
 
     def clear(self) -> None:
         """Drop all state. Called on disconnect, before the replacement snapshot."""
-        self.seq = 0
+        self.seq += 1 
         self.asks = SortedDict()
         self.bids = SortedDict()
 
@@ -249,7 +254,7 @@ class OrderBook:
         book. On the per-frame path, so its cost is part of the representation
         question above.
         """
-        if n == None:
+        if n is None:
             n = self.depth
         bids, asks = self.depth_levels(n)
 
