@@ -127,8 +127,6 @@ class OrderBook:
 
         for book_level in bids:
             price,qty = book_level
-            if price >= self.best_ask.price:
-                raise ValueError("Crossed bid price")
             if qty == 0:
                 if price not in self.bids:
                     continue
@@ -138,14 +136,12 @@ class OrderBook:
             if qty < 0:
                 raise ValueError('Error')
             self.bids[price] = Level(price,qty)
-            if len(self.bids) > self.depth:
-                worst_bid_price = self.bids.keys()[0]
-                self.bids.pop(worst_bid_price)
+        while len(self.bids) > self.depth:
+            worst_bid_price = self.bids.keys()[0]
+            self.bids.pop(worst_bid_price)
 
         for book_level in asks:
             price,qty = book_level
-            if price <= self.best_bid.price:
-                raise ValueError("Crossed ask price")
             if qty == 0:
                 if price not in self.asks:
                     continue
@@ -155,10 +151,12 @@ class OrderBook:
             if qty < 0:
                 raise ValueError('Error')
             self.asks[price] = Level(price,qty)
-            if len(self.asks) > self.depth:
-                worst_ask_price = self.asks.keys()[-1]
-                self.asks.pop(worst_ask_price)
+        while len(self.asks) > self.depth:
+            worst_ask_price = self.asks.keys()[-1]
+            self.asks.pop(worst_ask_price)
 
+        if self.best_ask and self.best_bid and self.best_ask.price <= self.best_bid.price:
+            raise ValueError('Crossed')
 
     def clear(self) -> None:
         """Drop all state. Called on disconnect, before the replacement snapshot."""
@@ -219,7 +217,7 @@ class OrderBook:
         else:
             top_bids = []
             bids_keys = self.bids.keys()
-            for i in range(n):
+            for i in range(1,n+1):
                 top_bids.append(Level(bids_keys[-i],self.bids[bids_keys[-i]].qty))
             top_bids = tuple(top_bids)
 
@@ -233,7 +231,7 @@ class OrderBook:
             top_asks = []
             asks_keys = self.asks.keys()
             for i in range(n):
-                top_asks.append(Level(asks_keys[-i],self.asks[asks_keys[-i]].qty))
+                top_asks.append(Level(asks_keys[i],self.asks[asks_keys[i]].qty))
             top_asks = tuple(top_asks)
 
         return (top_bids,top_asks)
@@ -253,6 +251,8 @@ class OrderBook:
         book. On the per-frame path, so its cost is part of the representation
         question above.
         """
+        if not n:
+            n = self.depth
         bids, asks = self.depth_levels(n)
 
         return BookView(
