@@ -1,18 +1,26 @@
 """Specification for :mod:`l2tca.tca.analysis`, as executable tests.
 
-FAILS until the analysis is written.
+Two layers, written at different times and for different reasons.
 
-**These assert properties, not values, and that is deliberate.** The three
-design questions at the top of ``l2tca/tca/analysis.py`` -- which instant and
-which price make the arrival benchmark, how a parent order is split and filled,
-how slippage decomposes -- are yours to answer, and a test asserting
-``arrival_price(...) == 100.5`` would answer the first one for you.
+**Properties**, first, while the three design questions at the top of
+``l2tca/tca/analysis.py`` were still open -- which instant and which price make
+the arrival benchmark, how a parent order is split and filled, how slippage
+decomposes. A test asserting ``arrival_price(...) == 100.5`` would have answered
+the first one, so what is pinned up there is only what must hold *whatever* the
+answer turns out to be: a benchmark price lies inside the book that produced it,
+a simulation cannot fill more than the parent quantity, a decomposition is finite
+and internally consistent.
 
-So what is pinned here is everything that must hold *whatever* you decide: a
-benchmark price lies inside the book that produced it, a simulation cannot fill
-more than the parent quantity, a decomposition is finite and internally
-consistent. Once you have made the decisions, add the value tests -- they will
-be short, and they will be yours.
+**Values**, second, once the decisions were made and recorded in ``docs/CORE.md``
+section 4. These are arithmetic on a two-view book small enough to check by hand,
+so a changed decision surfaces as a specific number moving rather than as a vague
+failure.
+
+The properties alone were not enough, and it is worth knowing why: they passed
+over an implementation that stamped each fill with the arrival time of the book
+it read rather than the instant the child was sent, because the fixture up here
+delivers one view per second and the two coincide on that grid. The value tests
+use uneven arrivals, where they do not.
 """
 
 from __future__ import annotations
@@ -196,3 +204,162 @@ def test_attribution_with_no_fills_still_returns_the_same_keys() -> None:
     filled = attribute_slippage(parent, [fill(2 * SECOND, "101.0", "10")], series)
     unfilled = attribute_slippage(parent, [], series)
     assert filled.keys() == unfilled.keys()
+
+
+# -- hand-computed values --------------------------------------------------
+#
+# Everything above asserts properties, which is what the specification could
+# pin before the design decisions were made. The decisions are made (docs/CORE.md
+# section 4), so these pin arithmetic instead: a changed decision now shows up as
+# a specific number moving.
+#
+# The book both sections below use, chosen so the arrival mid is exactly 100 and
+# a target notional of 1000 makes one currency unit worth exactly 10 bps:
+#
+#     view A, recv_ns = 0      bids 99.50 x5, 98.50 x10   asks 100.50 x3, 101.50 x7
+#     view B, recv_ns = 10s    bids 100.50 x5, 99.50 x10  asks 101.50 x3, 102.50 x7
+#
+#     mid(A) = 100.00     mid(B) = 101.00     ask depth per view = 10
+
+
+def two_views() -> list:
+    return [
+        book_view(
+            [("99.50", "5"), ("98.50", "10")],
+            [("100.50", "3"), ("101.50", "7")],
+            seq=0,
+            recv_ns=0,
+            recv_wall_ns=0,
+        ),
+        book_view(
+            [("100.50", "5"), ("99.50", "10")],
+            [("101.50", "3"), ("102.50", "7")],
+            seq=1,
+            recv_ns=10 * SECOND,
+            recv_wall_ns=10 * SECOND,
+        ),
+    ]
+
+
+def test_arrival_price_takes_the_contemporaneous_view_not_the_next_one() -> None:
+    series = two_views()
+    # Between the two views: the later one had not arrived yet.
+    assert arrival_price(order(decision_ns=9 * SECOND), series) == Decimal("100.00")
+    # Exactly on a view: "at or before" includes at.
+    assert arrival_price(order(decision_ns=10 * SECOND), series) == Decimal("101.00")
+
+
+def test_arrival_price_before_every_view_does_not_reach_forward() -> None:
+    """Taking the first view instead would be look-ahead, and would flatter the cost."""
+    series = two_views()
+    with pytest.raises(ValueError):
+        arrival_price(order(decision_ns=-1), series)
+
+
+def test_interval_vwap_weights_by_volume_not_by_view() -> None:
+    series = two_views()
+    volumes = [(0, Decimal("3")), (10 * SECOND, Decimal("1"))]
+    # (3 * 100.00 + 1 * 101.00) / 4
+    assert interval_vwap(series, volumes, 0, 10 * SECOND) == Decimal("100.25")
+
+
+def test_interval_vwap_ignores_buckets_outside_the_window() -> None:
+    series = two_views()
+    volumes = [(0, Decimal("3")), (10 * SECOND, Decimal("1"))]
+    # The second bucket falls outside, so only the first weighs in.
+    assert interval_vwap(series, volumes, 0, 9 * SECOND) == Decimal("100.00")
+
+
+def test_simulated_child_walks_the_book_one_fill_per_level() -> None:
+    """A buy of 8 in two slices takes 3 at the touch and 1 behind it, twice."""
+    fills = simulate_child_orders(order(Side.BID, "8"), two_views(), 0, 10 * SECOND, slices=2)
+    assert [(f.ts_ns, f.price, f.qty) for f in fills] == [
+        (0, Decimal("100.50"), Decimal("3")),
+        (0, Decimal("101.50"), Decimal("1")),
+        (5 * SECOND, Decimal("100.50"), Decimal("3")),
+        (5 * SECOND, Decimal("101.50"), Decimal("1")),
+    ]
+
+
+def test_a_slice_larger_than_the_visible_book_carries_its_remainder() -> None:
+    """30 wanted, 10 visible per slice: fill what is there, never extrapolate."""
+    fills = simulate_child_orders(order(Side.BID, "30"), two_views(), 0, 10 * SECOND, slices=2)
+    assert sum(f.qty for f in fills) == Decimal("20")  # 10 per slice, book exhausted
+    assert max(f.price for f in fills) == Decimal("101.50")  # never past the last level
+
+
+def test_fill_is_stamped_when_the_child_was_sent_not_when_the_book_arrived() -> None:
+    """The two coincide only on a fixture with a regular grid. A real feed is not one."""
+    sparse = [
+        book_view([("99.50", "5")], [("100.50", "50")], seq=0, recv_ns=0),
+        book_view([("99.50", "5")], [("100.50", "50")], seq=1, recv_ns=20 * SECOND),
+    ]
+    fills = simulate_child_orders(order(Side.BID, "10"), sparse, 5 * SECOND, 15 * SECOND)
+    assert fills
+    # Every child is worked at its scheduled instant, using the book standing then.
+    assert all(5 * SECOND <= f.ts_ns < 15 * SECOND for f in fills)
+    assert {f.ts_ns for f in fills} == {(5 + i) * SECOND for i in range(10)}
+
+
+def test_attribution_decomposes_a_two_fill_execution_exactly() -> None:
+    """Buy 10 from an arrival mid of 100, so 1.00 of cost is exactly 10 bps."""
+    parent = order(Side.BID, "10", decision_ns=0)
+    fills = [
+        fill(0, "100.50", "4"),  # at the touch, mid 100.00 -> 0.50 of spread each
+        fill(10 * SECOND, "102.50", "6", fee="3"),  # mid moved to 101.00 by now
+    ]
+    assert attribute_slippage(parent, fills, two_views()) == {
+        "spread_bps": 110.0,  # (4 * 0.50 + 6 * 1.50) * 10
+        "timing_bps": 60.0,  # (4 * 0.00 + 6 * 1.00) * 10
+        "fees_bps": 30.0,  # 3.00 * 10
+        "opportunity_bps": 0.0,  # fully filled
+        "total_bps": 200.0,
+    }
+
+
+def test_unfilled_quantity_is_charged_at_the_close_of_the_window() -> None:
+    """Underfilling while the market ran away is the cost shortfall exists to catch."""
+    parent = order(Side.BID, "10", decision_ns=0)
+    components = attribute_slippage(parent, [fill(0, "100.50", "4")], two_views())
+    assert components == {
+        "spread_bps": 20.0,  # 4 * 0.50 * 10
+        "timing_bps": 0.0,
+        "fees_bps": 0.0,
+        "opportunity_bps": 60.0,  # 6 unfilled * (101.00 - 100.00) * 10
+        "total_bps": 80.0,
+    }
+
+
+def test_a_sell_pays_a_positive_cost_too() -> None:
+    """Sign convention: positive means cost on both sides, or sells look free."""
+    parent = order(Side.ASK, "10", decision_ns=0)
+    components = attribute_slippage(parent, [fill(0, "99.50", "10")], two_views())
+    # Sold 0.50 below the arrival mid -- a cost, so positive.
+    assert components["spread_bps"] == 50.0
+    # And the market rose after, which for a seller who did fill is not a cost.
+    assert components["timing_bps"] == 0.0
+
+
+def test_the_layers_sum_to_the_total() -> None:
+    """A decomposition with a residual is not one."""
+    parent = order(Side.BID, "10", decision_ns=0)
+    fills = [fill(0, "100.50", "4"), fill(10 * SECOND, "102.50", "3", fee="1")]
+    components = attribute_slippage(parent, fills, two_views())
+    layers = sum(v for k, v in components.items() if k != "total_bps")
+    assert components["total_bps"] == pytest.approx(layers)
+
+
+def test_attribution_will_not_reach_forward_for_a_missing_view() -> None:
+    """Same rule as arrival_price, and it has to hold on every lookup, not just that one.
+
+    Clamping a not-yet-arrived view into place is silent: it returns a plausible
+    number built from a book the execution could not have seen.
+    """
+    series = two_views()
+    parent = order(Side.BID, "10", decision_ns=0)
+
+    with pytest.raises(ValueError):  # decision before any view
+        attribute_slippage(order(Side.BID, "10", decision_ns=-1), [fill(0, "100.50", "10")], series)
+
+    with pytest.raises(ValueError):  # a fill before any view
+        attribute_slippage(parent, [fill(-1, "100.50", "10")], series)
