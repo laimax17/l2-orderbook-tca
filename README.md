@@ -1,4 +1,19 @@
-# l2-orderbook-tca
+# l2-orderbook-tca — template branch
+
+> **This branch is an exercise, not a finished project.** Everything around the
+> algorithms is written and tested; the four modules worth writing by hand are
+> signatures, docstrings and a red test suite. Clone it and fill them in.
+>
+> ```bash
+> git clone -b template https://github.com/laimax17/l2-orderbook-tca
+> cd l2-orderbook-tca && uv sync --all-extras
+> uv run pytest              # 84 red, 119 green. The 84 are the work.
+> ```
+>
+> `main` carries a completed implementation. It is a spoiler for every design
+> question below, so read it afterwards rather than before — and expect your
+> answers to differ from its, because most of these questions have more than one
+> defensible answer.
 
 Real-time L2 order book reconstruction and execution cost analysis (TCA) from
 Kraken's public WebSocket feed.
@@ -112,7 +127,7 @@ the open design questions.
 they are red:
 
 ```bash
-uv run pytest                  # 118 pass, 74 fail -- the 74 are the work
+uv run pytest                  # 119 pass, 84 fail -- the 84 are the work
 uv run pytest -m core          # the core suite alone
 uv run pytest -m "not core"    # the infrastructure alone: green. What CI runs.
 ```

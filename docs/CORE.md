@@ -9,7 +9,7 @@ a `BookView`, so neither can be validated against real data until the book
 produces one.
 
 ```bash
-uv run pytest                                 # 118 pass, 74 fail
+uv run pytest                                 # 119 pass, 84 fail
 uv run pytest -m core                         # the whole development target
 uv run pytest tests/test_order_book.py        # one file
 uv run pytest -m "not core"                   # the infrastructure alone: green
@@ -87,149 +87,31 @@ Open:
 
 ## 4. `tca/analysis.py` — execution cost
 
-**These decisions are made.** They are recorded here rather than left open,
-because every number this package produces inherits them and a reader is
-entitled to know what they inherited. Each is defensible, none is the only
-answer, and reversing one is a legitimate change -- provided the reasoning
-replaces the reasoning below rather than merely contradicting it.
+Three decisions, spelled out in the module's top comment and reproduced here
+because they are the substance of the whole package:
 
-Notation, used throughout:
+**Arrival price.** Which instant — the decision, arrival at the venue, the first
+fill? Which price at that instant — mid, the touch on the trading side,
+micro-price, a short average? The book updates continuously and a fill lands
+between two updates: which view counts as contemporaneous, and does the rule
+differ between the arrival benchmark and per-fill benchmarks?
 
-| | |
-|---|---|
-| `d` | `side.sign` -- `+1` for a buy, `-1` for a sell |
-| `P0` | the arrival mid |
-| `Mi` | the mid contemporaneous with fill `i` |
-| `Pi`, `qi` | the price and quantity of fill `i` |
-| `Q`, `Qt` | quantity filled, quantity targeted |
-| `Pend` | the mid at the end of the execution window |
+**Child orders.** How is the parent split — fixed slices, fixed intervals,
+participation rate, adaptive? When does a child fill; does a resting child ever
+fill, given that the `book` channel carries no trade prints? What happens to a
+child the book cannot fill? What does an unfilled remainder cost?
 
-### 4.1 The arrival benchmark
+**Attribution.** How many layers, and which? Do they sum exactly to the total,
+and what does a residual mean? What is the denominator, and is it the same for
+every layer? What is the sign convention, and does it hold on both sides of the
+market?
 
-**The instant: the decision** (`Order.decision_ns`).
+`tests/test_analysis.py` asserts only properties that hold whatever you decide —
+a benchmark price lies inside the book that produced it, a simulation cannot
+overfill the parent, an attribution is finite and its keys are stable. Add the
+value tests once you have decided; they will be short, and they will be yours.
 
-Shortfall in Perold's original sense is measured against the price at which the
-decision was taken, and that is the only choice that carries the cost of the
-delay between deciding and reaching the venue. Measuring from arrival at the
-venue excuses that delay; the cost is still paid, it just stops being anyone's.
-
-The cost of this choice is that the numbers include latency the trader may not
-control. That is the intended reading, not a defect.
-
-**The price: the mid.**
-
-Neutral. Taking the touch on the trading side (the ask, for a buy) charges half
-a spread before anything has happened, so a flawless execution still shows a
-cost -- conflating "the market charges a spread" with "we executed badly". With
-the mid, spread cost appears explicitly as its own attribution layer instead.
-
-The micro-price is a better fair-value estimate and is deliberately not used: it
-is itself a modelling choice, and a benchmark should carry as little research as
-possible.
-
-**Contemporaneity: the last view with `recv_ns <= t`.**
-
-The most consequential rule in the module. Taking the *next* view uses a book
-that had not yet arrived -- look-ahead bias, and it flatters every number it
-touches.
-
-The same rule applies everywhere: the arrival benchmark, per-fill benchmarks,
-and VWAP bucketing. A different rule in one place would need its own defence.
-
-When no view exists at or before `t`, raise. Falling back to the first future
-view is the look-ahead this rule exists to prevent.
-
-### 4.2 Child order simulation
-
-**Schedule: TWAP.** Equal slices at equal intervals across the window; ten
-slices unless a caller says otherwise.
-
-It is a real benchmark strategy rather than a placeholder, it has no free
-parameter beyond the slice count, and the alternatives are unavailable or
-unwise: VWAP and participation-rate schedules need traded volume, which the
-`book` channel does not carry, and an adaptive schedule would make the
-simulator's output depend on a signal -- measuring the signal, not the
-execution.
-
-**Fills: aggressive only.** Every child crosses the spread and walks the
-opposite side of the book.
-
-This is the strongest constraint in the package and it comes from the data.
-Without trade prints there is no evidence of *when* a resting order would have
-filled, and modelling that requires a queue position which L2 data does not
-contain -- it aggregates each price level, so ten units at a price could be one
-order or ten. An aggressive-only simulator is therefore an upper bound on cost
-whose every assumption is visible in the book, rather than a lower one resting
-on a queue model that cannot be validated.
-
-**Depth exhausted: fill what is there, carry the remainder to the next slice.**
-Never extrapolate past the last visible level; an invented price for
-unfillable quantity is a fabricated number that reads as a real estimate.
-
-**Remainder at the end of the window: left unfilled.** Its cost is opportunity
-cost and belongs in the attribution, not in an invented fill.
-
-**Granularity: one `Fill` per book level consumed.** A single averaged fill per
-slice hides that the order walked five levels, which is the thing worth seeing.
-
-### 4.3 Attribution
-
-Four layers that sum exactly to the total. In currency:
-
-```
-spread_ccy       =  sum over fills of  qi * (Pi - Mi) * d
-timing_ccy       =  sum over fills of  qi * (Mi - P0) * d
-fees_ccy         =  sum over fills of  fee_i
-opportunity_ccy  =  (Qt - Q) * (Pend - P0) * d
-```
-
-They sum by construction, not by approximation:
-
-```
-spread_ccy + timing_ccy = sum of qi * [(Pi - Mi) + (Mi - P0)] * d
-                        = sum of qi * (Pi - P0) * d
-                        = Q * (average fill price - P0) * d
-```
-
-which is the execution cost; fees and opportunity cost complete the shortfall.
-There is no residual, and a decomposition with a residual is not one.
-
-**Denominator: `Qt * P0`, the target notional, shared by all four layers.**
-Dividing by *filled* notional is the common error: it makes a badly underfilled
-order look cheap, which is precisely the case shortfall exists to penalise. A
-shared denominator is also what lets the layers add up.
-
-```
-<layer>_bps = <layer>_ccy / (Qt * P0) * 1e4
-total_bps   = the sum of the four
-```
-
-**Sign: positive means cost**, on both sides, via `d`. Every layer goes through
-the same helper; a per-layer sign flip is how a TCA report ends up flattering
-sells and punishing buys.
-
-**Keys are constant.** All five keys are returned whether or not anything
-filled. With no fills, the first three are zero and opportunity carries the
-whole order.
-
-**Market impact is deliberately not a layer.** Separating the price move the
-order caused from the move the market would have made anyway needs either a
-control -- what the price would have done without this order -- or a trade feed
-to infer it from. Neither exists here. The move is reported whole, as `timing`.
-A number labelled "impact" produced without either would look authoritative and
-mean nothing.
-
-### 4.4 Interval VWAP
-
-For each `(ts, volume)` bucket, take the mid of the view contemporaneous with
-`ts` under the rule in 4.1, and weight it by that bucket's volume:
-
-```
-vwap = sum(volume_i * mid_i) / sum(volume_i)
-```
-
-Buckets with no view at or before them are skipped. Raise when the window is
-empty, when every bucket was skipped, or when the volumes sum to zero.
+Write the decisions down here, in this file, before writing the code.
 
 ---
 

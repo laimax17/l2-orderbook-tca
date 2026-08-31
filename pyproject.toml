@@ -44,7 +44,7 @@ markers = [
 # invocation, including the explicit node ids an IDE passes when you click one
 # test -- which silently deselects it instead of running it. Filtering belongs
 # on the command line, where it is visible:
-#   pytest                 -> 118 pass, 74 fail. The core is unwritten; that is
+#   pytest                 -> 119 pass, 84 fail. The core is unwritten; that is
 #                             the development target, and it should be loud.
 #   pytest -m "not core"   -> the infrastructure suite alone. What CI runs.
 #   pytest -m core         -> the core suite alone.

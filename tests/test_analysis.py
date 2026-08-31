@@ -55,6 +55,62 @@ def views(n: int = 10, *, start_ns: int = 0, step_ns: int = SECOND):
     ]
 
 
+def sparse_views():
+    """The same book, but arriving twenty seconds apart. A quiet market is still one.
+
+    ``views()`` delivers one view per second, which makes the instant something
+    happened and the arrival time of the book that was standing then coincide.
+    They do not coincide on a real feed, and a benchmark that confuses the two
+    passes every test written on a regular grid.
+    """
+    return [
+        book_view(
+            [("100.00", "10"), ("99.00", "20")],
+            [("101.00", "10"), ("102.00", "20")],
+            seq=0,
+            recv_ns=0,
+            recv_wall_ns=0,
+        ),
+        book_view(
+            [("100.50", "10"), ("99.50", "20")],
+            [("101.50", "10"), ("102.50", "20")],
+            seq=1,
+            recv_ns=20 * SECOND,
+            recv_wall_ns=20 * SECOND,
+        ),
+    ]
+
+
+def two_futures(after_ns: int):
+    """One shared past and two wildly different futures, both starting at ``after_ns``.
+
+    Returns ``(past, rich, poor)``. Anything measured at an instant before
+    ``after_ns`` has to give the same answer against ``past + rich`` and
+    ``past + poor``, because at that instant the two worlds are identical.
+    """
+    past = [book_view([("100.00", "10")], [("101.00", "10")], seq=0, recv_ns=0)]
+    rich = [book_view([("200.00", "10")], [("201.00", "10")], seq=1, recv_ns=after_ns)]
+    poor = [book_view([("50.00", "10")], [("51.00", "10")], seq=1, recv_ns=after_ns)]
+    return past, rich, poor
+
+
+def outcome(call):
+    """What a call did, in a form two calls can be compared by.
+
+    A returned value, or the type of what was raised. Used where the test cares
+    that two calls behave *the same*, without prescribing which behaviour --
+    that is one of the decisions left to you.
+    """
+    try:
+        return ("returned", call())
+    except NotImplementedError:
+        # Not a behaviour to compare. Without this the comparison is vacuously
+        # true against the stubs, and the test goes green having checked nothing.
+        raise
+    except Exception as exc:
+        return ("raised", type(exc))
+
+
 # -- arrival benchmark -----------------------------------------------------
 
 
@@ -125,7 +181,15 @@ def test_simulation_never_overfills_the_parent() -> None:
 
 
 def test_simulated_fills_stay_inside_the_window() -> None:
-    fills = simulate_child_orders(order(Side.BID, "10"), views(20), 2 * SECOND, 12 * SECOND)
+    """Deliberately on a book that arrives twice in forty seconds.
+
+    On ``views()`` this assertion passes even if each fill is stamped with the
+    arrival time of the book it read rather than the instant the child was sent,
+    because on a one-per-second grid those are the same number. Here they are
+    twenty seconds apart, so only one of the two can be inside the window.
+    """
+    fills = simulate_child_orders(order(Side.BID, "10"), sparse_views(), 2 * SECOND, 12 * SECOND)
+    assert fills, "a book with depth on both sides should produce at least one fill"
     assert all(2 * SECOND <= f.ts_ns <= 12 * SECOND for f in fills)
 
 
@@ -196,3 +260,50 @@ def test_attribution_with_no_fills_still_returns_the_same_keys() -> None:
     filled = attribute_slippage(parent, [fill(2 * SECOND, "101.0", "10")], series)
     unfilled = attribute_slippage(parent, [], series)
     assert filled.keys() == unfilled.keys()
+
+
+# -- no look-ahead ---------------------------------------------------------
+#
+# Three tests for one rule, because it has to hold on every lookup rather than
+# on the headline one. What an unavailable benchmark *does* is yours to decide
+# (see question 1); that it cannot depend on a book which had not arrived is not,
+# because such a number is unobtainable at the instant it claims to describe.
+
+
+def test_arrival_price_cannot_see_a_book_that_had_not_arrived() -> None:
+    past, rich, poor = two_futures(after_ns=9 * SECOND)
+    parent = order(decision_ns=5 * SECOND)
+
+    assert outcome(lambda: arrival_price(parent, past + rich)) == outcome(
+        lambda: arrival_price(parent, past + poor)
+    )
+    # And with no past at all -- where falling back to the nearest view is most
+    # tempting, and produces a number from a book nobody could have read.
+    assert outcome(lambda: arrival_price(parent, rich)) == outcome(
+        lambda: arrival_price(parent, poor)
+    )
+
+
+def test_interval_vwap_cannot_see_a_book_that_had_not_arrived() -> None:
+    past, rich, poor = two_futures(after_ns=9 * SECOND)
+    buckets = [(5 * SECOND, Decimal("1"))]
+
+    assert outcome(lambda: interval_vwap(past + rich, buckets, 0, 8 * SECOND)) == outcome(
+        lambda: interval_vwap(past + poor, buckets, 0, 8 * SECOND)
+    )
+    assert outcome(lambda: interval_vwap(rich, buckets, 0, 8 * SECOND)) == outcome(
+        lambda: interval_vwap(poor, buckets, 0, 8 * SECOND)
+    )
+
+
+def test_attribution_cannot_see_a_book_that_had_not_arrived() -> None:
+    past, rich, poor = two_futures(after_ns=9 * SECOND)
+    parent = order(Side.BID, "10", decision_ns=5 * SECOND)
+    fills = [fill(5 * SECOND, "101.0", "10")]
+
+    assert outcome(lambda: attribute_slippage(parent, fills, past + rich)) == outcome(
+        lambda: attribute_slippage(parent, fills, past + poor)
+    )
+    assert outcome(lambda: attribute_slippage(parent, fills, rich)) == outcome(
+        lambda: attribute_slippage(parent, fills, poor)
+    )
