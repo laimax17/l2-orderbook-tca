@@ -1,4 +1,4 @@
-"""Message types for Kraken's public WebSocket v2 ``book`` channel.
+"""Message types for Kraken's public WebSocket v2 ``book`` and ``trade`` channels.
 
 Types only; decoding lives in :mod:`l2tca.feed.parser`. Receiving and parsing
 are separate so each can be benchmarked, fuzzed and replayed on its own.
@@ -30,6 +30,8 @@ __all__ = [
     "RawMessage",
     "Status",
     "SubscriptionAck",
+    "Trade",
+    "Trades",
     "Unknown",
 ]
 
@@ -95,6 +97,44 @@ class BookUpdate:
 
 
 @dataclass(frozen=True, slots=True)
+class Trade:
+    """One executed trade print.
+
+    Attributes:
+        side: **The aggressor's side**, which is the whole reason this channel
+            is worth carrying. ``"buy"`` means the taker lifted the offer.
+            Knowing it directly means trade sign never has to be inferred from
+            the quote with a Lee-Ready style rule, and inference is where the
+            error in most microstructure work comes from.
+        ord_type: ``"market"`` or ``"limit"`` -- the order type of the taker.
+        trade_id: Venue-assigned, monotonic per symbol. Gaps mean lost frames.
+    """
+
+    symbol: str
+    side: str
+    price: Decimal
+    qty: Decimal
+    trade_id: int | None
+    ord_type: str | None
+    exchange_ts_ns: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class Trades:
+    """One ``trade`` frame, which may carry several prints.
+
+    A single aggressive order that walks three levels is reported as three
+    trades in one frame. They are kept together rather than flattened because
+    they share an arrival stamp: splitting them would invent an ordering the
+    feed never expressed, and losing the grouping would hide that they came
+    from one taker.
+    """
+
+    symbol: str
+    trades: tuple[Trade, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Heartbeat:
     """Kraken sends this at least once a second on a subscribed connection."""
 
@@ -143,5 +183,13 @@ class Unknown:
 
 
 ParsedMessage = (
-    BookSnapshot | BookUpdate | Heartbeat | Status | SubscriptionAck | Pong | ErrorMessage | Unknown
+    BookSnapshot
+    | BookUpdate
+    | Trades
+    | Heartbeat
+    | Status
+    | SubscriptionAck
+    | Pong
+    | ErrorMessage
+    | Unknown
 )

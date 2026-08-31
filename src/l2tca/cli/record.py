@@ -17,7 +17,10 @@ __all__ = ["run"]
 
 def run(args: argparse.Namespace) -> int:
     config = FeedConfig(
-        symbol=args.symbol, depth=args.depth, **({"url": args.url} if args.url else {})
+        symbol=args.symbol,
+        depth=args.depth,
+        trades=getattr(args, "trades", False),
+        **({"url": args.url} if args.url else {}),
     )
     directory = args.dir or Paths().raw
     path = args.out or default_capture_path(directory, config, compress=args.compress)

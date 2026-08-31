@@ -6,8 +6,10 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from tests.conftest import SNAPSHOT_FRAME, UPDATE_FRAME
+from tests.factories import raw_messages, trade_frame, write_capture
 
-from l2tca.io.convert import iter_tick_rows
+from l2tca.io.convert import iter_tick_rows, iter_trade_rows
 from l2tca.io.reader import ParquetValidationError, read_table, scan_table, validate_frame
 from l2tca.io.schema import SCHEMA_VERSION, TABLES, partition_of
 from l2tca.io.writer import PartitionedParquetWriter
@@ -190,3 +192,43 @@ def test_capture_converts_to_ticks_end_to_end(tmp_path: Path, capture: Path) -> 
     deletes = frame.filter(pl.col("is_delete"))
     assert deletes.height > 0
     assert deletes.get_column("qty").to_list() == [0.0] * deletes.height
+
+
+# -- trade table -----------------------------------------------------------
+
+
+def test_trade_rows_survive_the_round_trip(tmp_path: Path) -> None:
+    """Written through the real writer and read back with Polars, like every table."""
+    path = write_capture(
+        tmp_path / "trades.jsonl",
+        raw_messages(
+            [
+                SNAPSHOT_FRAME,
+                trade_frame([("buy", "78012.3", "0.015"), ("buy", "78012.4", "0.2")]),
+                UPDATE_FRAME,
+                trade_frame([("sell", "78011.9", "1.25")], first_trade_id=3),
+            ]
+        ),
+    )
+
+    rows = list(iter_trade_rows(path))
+    assert len(rows) == 3
+
+    root = tmp_path / "pq"
+    with PartitionedParquetWriter(root, "trade", rows[0]["symbol"]) as writer:
+        writer.write_rows(iter(rows))
+
+    frame = read_table(root, "trade")
+    assert frame.height == 3
+    assert frame.get_column("side").to_list() == ["buy", "buy", "sell"]
+    assert frame.get_column("trade_id").to_list() == [1, 2, 3]
+    assert frame.get_column("price").to_list() == [78012.3, 78012.4, 78011.9]
+    # The two prints from one taker share an arrival stamp; the third does not.
+    stamps = frame.get_column("recv_ns").to_list()
+    assert stamps[0] == stamps[1] != stamps[2]
+
+
+def test_a_book_only_capture_yields_no_trade_rows(tmp_path: Path) -> None:
+    """Not an error: most captures in this project are recorded without --trades."""
+    path = write_capture(tmp_path / "book.jsonl", raw_messages([SNAPSHOT_FRAME, UPDATE_FRAME]))
+    assert list(iter_trade_rows(path)) == []

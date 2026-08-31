@@ -60,6 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     rec = sub.add_parser("record", help="capture a live session to data/raw")
     _add_feed_args(rec)
+    # Only on `record`: synth and bench read a file, and a flag that silently
+    # does nothing is worse than no flag.
+    rec.add_argument(
+        "--trades",
+        action="store_true",
+        help="also subscribe to the trade channel (executed prints, aggressor side)",
+    )
     rec.add_argument("--duration", type=float, default=600.0, help="seconds; 0 means until Ctrl-C")
     rec.add_argument("--out", type=Path, default=None, help="output file (default: auto-named)")
     rec.add_argument("--dir", type=Path, default=None, help="output directory for auto-naming")

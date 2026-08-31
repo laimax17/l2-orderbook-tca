@@ -21,6 +21,7 @@ __all__ = [
     "handshake",
     "ping_request",
     "subscribe_request",
+    "subscribe_requests",
 ]
 
 
@@ -32,18 +33,29 @@ class StaleConnectionError(ConnectionError):
     """No frame arrived within the staleness budget, and a ping did not revive it."""
 
 
-def subscribe_request(config: FeedConfig, req_id: int) -> dict:
-    """The exact ``subscribe`` payload, exposed so tests can assert on it."""
-    return {
-        "method": "subscribe",
-        "req_id": req_id,
-        "params": {
-            "channel": "book",
-            "symbol": [config.wire_symbol],
-            "depth": config.depth,
-            "snapshot": True,
-        },
-    }
+def subscribe_request(config: FeedConfig, req_id: int, channel: str = "book") -> dict:
+    """The exact ``subscribe`` payload, exposed so tests can assert on it.
+
+    ``depth`` is a book-channel parameter; sending it on a ``trade``
+    subscription is not merely redundant, Kraken rejects unknown parameters.
+    """
+    params: dict = {"channel": channel, "symbol": [config.wire_symbol], "snapshot": True}
+    if channel == "book":
+        params["depth"] = config.depth
+    return {"method": "subscribe", "req_id": req_id, "params": params}
+
+
+def subscribe_requests(config: FeedConfig, first_req_id: int) -> list[dict]:
+    """One request per configured channel, with consecutive ``req_id``s.
+
+    Consecutive rather than shared, because an acknowledgement carries the
+    ``req_id`` it answers and nothing else: with one id for both, a rejection
+    could not be attributed to the channel that caused it.
+    """
+    return [
+        subscribe_request(config, first_req_id + i, channel)
+        for i, channel in enumerate(config.channels)
+    ]
 
 
 def ping_request(req_id: int) -> dict:
@@ -53,48 +65,63 @@ def ping_request(req_id: int) -> dict:
 async def handshake(
     conn: WebSocketLike,
     config: FeedConfig,
-    req_id: int,
+    first_req_id: int,
     stamp,
 ) -> list[RawMessage]:
-    """Subscribe and wait for the acknowledgement.
+    """Subscribe to every configured channel and wait for all acknowledgements.
 
     Frames that arrive while waiting (status, heartbeat, even the snapshot
     itself) are collected and returned so they land in the recording in arrival
     order. Dropping them would leave a hole at the start of every capture, which
     is exactly where the snapshot lives.
 
+    Every subscription must be accounted for before this returns. Returning as
+    soon as the book is flowing would let a rejected ``trade`` subscription pass
+    unnoticed, and the failure mode of that is the worst kind: a capture that
+    looks healthy and silently contains no trades.
+
     Args:
+        first_req_id: Id of the first request; subsequent channels take the
+            following ids.
         stamp: Callable turning a raw payload into a :class:`RawMessage`. Passed
             in so the client keeps ownership of sequence numbering and stats.
 
     Raises:
-        SubscriptionError: Kraken answered ``success: false``.
-        StaleConnectionError: No acknowledgement within the budget.
+        SubscriptionError: Kraken answered ``success: false`` for any channel.
+        StaleConnectionError: Not every acknowledgement arrived within the budget.
     """
-    request = subscribe_request(config, req_id)
-    await conn.send(json.dumps(request))
+    requests = subscribe_requests(config, first_req_id)
+    pending = {request["req_id"]: request["params"]["channel"] for request in requests}
+    book_req_id = next((rid for rid, ch in pending.items() if ch == "book"), None)
+
+    for request in requests:
+        await conn.send(json.dumps(request))
 
     collected: list[RawMessage] = []
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(config.stale_after_s, 1.0) * 3
 
-    while True:
+    while pending:
         remaining = deadline - loop.time()
         if remaining <= 0:
-            raise StaleConnectionError("no subscription acknowledgement within budget")
+            raise StaleConnectionError(
+                f"no acknowledgement for {sorted(pending.values())} within budget"
+            )
 
         message = stamp(await asyncio.wait_for(conn.recv(), timeout=remaining))
         collected.append(message)
 
         parsed = parse(message.payload)
-        if isinstance(parsed, SubscriptionAck) and parsed.req_id == req_id:
+        if isinstance(parsed, SubscriptionAck) and parsed.req_id in pending:
+            channel = pending.pop(parsed.req_id)
             if not parsed.success:
                 raise SubscriptionError(
-                    f"kraken rejected subscription for {config.wire_symbol} "
-                    f"depth={config.depth}: {parsed.error}"
+                    f"kraken rejected the {channel} subscription for "
+                    f"{config.wire_symbol} depth={config.depth}: {parsed.error}"
                 )
-            return collected
-        if isinstance(parsed, BookSnapshot):
+        elif isinstance(parsed, BookSnapshot) and book_req_id in pending:
             # Some deployments deliver the snapshot before the ack; once the book
-            # is flowing the subscription is plainly live.
-            return collected
+            # is flowing that subscription is plainly live. Only that one.
+            pending.pop(book_req_id)
+
+    return collected

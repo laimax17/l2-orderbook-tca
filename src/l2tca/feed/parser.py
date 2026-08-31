@@ -23,6 +23,8 @@ from l2tca.feed.messages import (
     Pong,
     Status,
     SubscriptionAck,
+    Trade,
+    Trades,
     Unknown,
 )
 
@@ -58,6 +60,8 @@ def parse(payload: str) -> ParsedMessage:
     channel = obj.get("channel")
     if channel == "book":
         return _parse_book(obj)
+    if channel == "trade":
+        return _parse_trade(obj)
     if channel == "heartbeat":
         return Heartbeat()
     if channel == "status":
@@ -143,3 +147,49 @@ def _as_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+# The ``trade`` frame shape, per Kraken's WebSocket v2 documentation:
+#
+#   {"channel": "trade", "type": "update", "data": [
+#       {"symbol": "BTC/USD", "side": "buy", "price": 4136.4, "qty": 0.23374249,
+#        "ord_type": "market", "trade_id": 0, "timestamp": "2022-12-25T09:30:59.123456Z"}]}
+#
+# Written from the published schema rather than against a live socket, because
+# the machine this was developed on cannot reach Kraken. Every field is read
+# defensively and a frame that does not match becomes an ErrorMessage rather
+# than a silently empty batch, so a shape mismatch shows up the first time a
+# capture is inspected instead of as a missing table three days later. Validate
+# against a real capture before trusting any number derived from this table:
+#
+#   l2tca record --trades --duration 60 --out data/raw/probe.jsonl
+#   l2tca inspect data/raw/probe.jsonl
+
+
+def _parse_trade(obj: dict[str, Any]) -> ParsedMessage:
+    data = obj.get("data")
+    if not isinstance(data, list) or not data:
+        return ErrorMessage(error="trade frame carried no data")
+
+    trades: list[Trade] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            return ErrorMessage(error="trade data entry was not an object")
+        try:
+            trades.append(
+                Trade(
+                    symbol=str(entry["symbol"]),
+                    side=str(entry["side"]),
+                    price=Decimal(str(entry["price"])),
+                    qty=Decimal(str(entry["qty"])),
+                    trade_id=_as_int(entry.get("trade_id")),
+                    ord_type=(
+                        str(entry["ord_type"]) if entry.get("ord_type") is not None else None
+                    ),
+                    exchange_ts_ns=parse_exchange_timestamp(entry.get("timestamp")),
+                )
+            )
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            return ErrorMessage(error=f"malformed trade entry: {exc}")
+
+    return Trades(symbol=trades[0].symbol, trades=tuple(trades))

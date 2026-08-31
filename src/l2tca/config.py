@@ -44,6 +44,13 @@ class FeedConfig:
     depth: int = 100
     url: str = KRAKEN_WS_URL
 
+    #: Also subscribe to the ``trade`` channel. Off by default so existing
+    #: captures and their sequence numbering stay reproducible: turning it on
+    #: interleaves a second stream into the recording, which is the point, but
+    #: it means a capture recorded with it cannot be compared frame-for-frame
+    #: against one recorded without.
+    trades: bool = False
+
     # Connection hygiene. ``ping_interval``/``ping_timeout`` drive the WebSocket
     # protocol-level keepalive; ``stale_after_s`` is our own application-level
     # watchdog: Kraken emits a ``heartbeat`` on every subscribed connection at
@@ -73,6 +80,11 @@ class FeedConfig:
     @property
     def wire_symbol(self) -> str:
         return normalize_symbol(self.symbol)
+
+    @property
+    def channels(self) -> tuple[str, ...]:
+        """Channels to subscribe to, in send order. One ``subscribe`` frame each."""
+        return ("book", "trade") if self.trades else ("book",)
 
 
 @dataclass(frozen=True, slots=True)

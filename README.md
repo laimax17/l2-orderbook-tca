@@ -33,7 +33,7 @@ git clone -b template https://github.com/laimax17/l2-orderbook-tca
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 460, "nodeSpacing": 45, "rankSpacing": 45, "curve": "basis"}}}%%
 flowchart TB
-    KRAKEN(["<b>Kraken WebSocket v2</b> — book · depth=100 · CRC32 on every frame"])
+    KRAKEN(["<b>Kraken WebSocket v2</b><br/>book · depth=100 · CRC32 on every frame<br/>trade · executed prints with the aggressor's side"])
 
     CLIENT["<b>feed/client.py</b><br/>subscribe · heartbeat · full-jitter reconnect · staleness watchdog<br/>stamps every frame: recv_ns = perf_counter_ns(), recv_wall_ns = time_ns()"]
 
@@ -42,6 +42,8 @@ flowchart TB
     SRC(["<b>feed/source.py — MessageSource</b><br/>live and replay both satisfy it, so nothing below this line can tell them apart"])
 
     PARSE["<b>feed/parser.py</b> — parse_float=Decimal, so the wire digits reach the checksum unrounded"]
+
+    TRADES(["<b>Trades</b> — executed prints, aggressor side"])
 
     SEQ["<b>book/sequence.py</b><br/>disconnected → resyncing → live · buffers updates while a snapshot is in flight"]
 
@@ -54,13 +56,16 @@ flowchart TB
     STORE["<b>io/</b><br/>pinned Arrow schemas<br/>hive symbol= / date= / hour="]
     BENCH["<b>bench/</b> — wraps parse → apply_update → view(10)<br/>recv → book-updated, p50/p90/p99/p99.9 + histogram<br/>warmup and snapshot rebuilds excluded"]
 
-    PQ[("<b>data/parquet/</b> — tick · snapshot · signal")]
+    PQ[("<b>data/parquet/</b> — tick · snapshot · signal · trade")]
     PLOT["<b>plot/</b> — depth ladder · spread series · latency histogram"]
 
     KRAKEN --> CLIENT
     CLIENT -->|live| SRC
     CLIENT --> CAP -->|offline| SRC
     SRC --> PARSE --> SEQ -->|apply| OB
+    PARSE -->|trade frames| TRADES
+    TRADES --> TCA
+    TRADES --> STORE
     OB -->|"CRC32 agrees"| VIEW
     OB -->|"drift — resubscribe for a fresh snapshot"| CLIENT
     VIEW --> SIG
@@ -96,7 +101,7 @@ Phase one, and nothing beyond it:
 | | |
 |---|---|
 | Exchange | Kraken public WebSocket v2 |
-| Channel | `book`, `depth=100` |
+| Channels | `book` (`depth=100`), and `trade` with `--trades` |
 | Symbol | `BTC/USD` (configurable; `XBT/USD` is accepted and normalised) |
 | Storage | JSONL captures, Parquet tables |
 
