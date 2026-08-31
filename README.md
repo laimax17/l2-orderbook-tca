@@ -231,23 +231,37 @@ by hand-written expectations. Without a capture of your own, the same command
 over `tests/fixtures/sample.jsonl.gz` reruns it on the opening 143 s
 (4852 / 4852).
 
-**Two things worth reading off that table.**
+> **These figures predate the read-path optimisation** described in
+> [`PERFORMANCE.md`](PERFORMANCE.md) and are kept as the baseline it was measured
+> against. Re-run `l2tca bench` to refresh them.
 
-`view(10)` costs **3.1×** what `apply_update` does — 13.75 µs against 4.38 µs.
-Taking the top ten levels out of the book is three times more expensive than
-maintaining it, which is not where the cost was expected to be, and it is the
-first thing to attack: the book is updated once per frame but read once per
-frame too, so it is more than half of the end-to-end path.
+**What that table said, and what was done about it.**
+
+`view(10)` cost **3.1×** what `apply_update` did — 13.75 µs against 4.38 µs.
+Reading the top ten levels out of the book was three times more expensive than
+maintaining it, which is not where the cost was expected to be, and since every
+frame is both written and read it was more than half the end-to-end path.
+
+The obvious suspect was the data structure. It was not: `depth_levels` was
+rebuilding `Level` objects the book already held, paying an allocation and a
+second `Decimal`-keyed lookup per level. Reading the values view directly made
+`view(10)` **2.95× faster** and end-to-end **1.51×**, with throughput up 48.8%
+and the checksum still agreeing on every frame. Six lines. The measurements,
+the equivalence proof over 24,260 (frame, n) pairs, and the reason the
+representation A/B would have drawn the wrong conclusion had it been run first
+are in [`PERFORMANCE.md`](PERFORMANCE.md).
 
 Parsing costs **1.4×** an update — 6.29 µs against 4.38 µs. That is the price of
 `parse_float=Decimal`, paid so the wire digits survive exactly into the checksum.
 Floats would be faster and would silently break integrity checking, so the
-trade is deliberate; it is worth knowing it is the second-largest term.
+trade is deliberate; it is worth knowing it is now the largest term after the
+end-to-end path itself.
 
 The representation A/B is the one row here that is not a measurement but a
 project: it means writing the book a second and third way (a plain dict sorted
 on read, a fixed tick array indexed by price level) and benchmarking all three.
-Left undone rather than guessed at.
+Left undone rather than guessed at — with two measurements that constrain it
+recorded in [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ## Design decisions
 

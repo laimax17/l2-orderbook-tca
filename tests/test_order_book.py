@@ -329,3 +329,23 @@ def test_a_real_capture_replays_without_violating_invariants(sample_capture: Pat
     bids, asks = book.depth_levels(100)
     assert bids and asks
     assert bids[0].price < asks[0].price
+
+
+def test_zero_levels_is_empty_not_everything() -> None:
+    """A slice of ``[-0:]`` is the whole side. The guard against that is load-bearing."""
+    book = loaded_book()
+    assert book.depth_levels(0) == ((), ())
+    assert book.depth_levels(-1) == ((), ())
+    assert book.depth_levels(1) != ((), ())
+
+
+def test_handed_out_levels_survive_a_later_update() -> None:
+    """Callers keep these tuples; an update must not reach back into one."""
+    book = loaded_book()
+    held, _ = book.depth_levels(3)
+    top = held[0]
+    book.apply_update(
+        update_frame(bids=[(str(top.price), "999")], asks=[]),
+    )
+    assert held[0] == top, "a rebind must not mutate a Level already returned"
+    assert book.depth_levels(3)[0][0].qty == Decimal("999")
