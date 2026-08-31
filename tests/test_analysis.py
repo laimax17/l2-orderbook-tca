@@ -37,10 +37,15 @@ SECOND = 1_000_000_000
 
 
 def views(n: int = 10, *, start_ns: int = 0, step_ns: int = SECOND):
-    """A drifting two-sided book, one view per step."""
+    """A two-sided book whose *mid* drifts up by a cent per step.
+
+    Both sides move together, so the spread stays at 1.00 and the mid walks
+    100.50, 100.51, 100.52, ... A book whose two sides moved apart would leave
+    the mid pinned and quietly make every benchmark in this file constant.
+    """
     return [
         book_view(
-            [(f"{100 - i * 0.01:.2f}", "10"), (f"{99 - i * 0.01:.2f}", "20")],
+            [(f"{100 + i * 0.01:.2f}", "10"), (f"{99 + i * 0.01:.2f}", "20")],
             [(f"{101 + i * 0.01:.2f}", "10"), (f"{102 + i * 0.01:.2f}", "20")],
             seq=i,
             recv_ns=start_ns + i * step_ns,
@@ -180,9 +185,7 @@ def test_fees_reach_the_attribution() -> None:
     parent = order(Side.BID, "10")
     series = views(20)
     free = attribute_slippage(parent, [fill(2 * SECOND, "101.0", "10")], series)
-    charged = attribute_slippage(
-        parent, [fill(2 * SECOND, "101.0", "10", fee="5")], series
-    )
+    charged = attribute_slippage(parent, [fill(2 * SECOND, "101.0", "10", fee="5")], series)
     assert free != charged
 
 
