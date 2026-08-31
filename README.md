@@ -161,14 +161,18 @@ environment block.
 | `view(10)`, p50 / p99 | **13.75 / 16.63 µs** (max 98.63) |
 | `apply_snapshot`, 100 levels a side | **448.75 µs**, once per connection |
 | Sustained throughput | **32,155 updates/s** — 23,602 in 0.734 s of wall clock |
-| Checksum verification rate | **4852 / 4852 (100.00%)** over the committed 143 s sample |
+| Checksum verification rate | **23,602 / 23,602 (100.00%)**, 0 sequence gaps |
 | Internal representation A/B (dict vs sorted vs tick array) | not measured — see below |
 | Capture size, 10 minutes at depth 100 | **7.8 MB** JSONL, ≈13.7 KB/s, ≈47 MB/hour; **10.4×** smaller gzipped |
 
 Reproduce with `uv run l2tca bench <capture> --warmup 500 --histogram` and
-`uv run l2tca inspect <capture> --verify`. The checksum figure is over the
-sample committed to `tests/fixtures/`, so anyone who clones can rerun it; it is
-the opening 143 s of the same session.
+`uv run l2tca inspect <capture> --verify`. Every update frame in the capture was
+replayed into the book and checked against the CRC32 Kraken computed over the
+top ten levels of each side — ten minutes of continuous incremental
+reconstruction with no drift, attested by the exchange's own ledger rather than
+by hand-written expectations. Without a capture of your own, the same command
+over `tests/fixtures/sample.jsonl.gz` reruns it on the opening 143 s
+(4852 / 4852).
 
 **Two things worth reading off that table.**
 
