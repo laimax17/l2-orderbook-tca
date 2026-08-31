@@ -211,7 +211,7 @@ def simulate_child_orders(
                     Fill(
                         price=level.price,
                         qty=take_qty,
-                        ts_ns=curr_view.recv_ns,
+                        ts_ns=t_ns,
                     )
                 )
                 filled_in_this_slice += take_qty
@@ -233,8 +233,9 @@ def _find_view_mid_at(ts_ns: int, views: Sequence[BookView]) -> Decimal:
     """
     view_timestamps = [v.recv_ns for v in views]
     idx = bisect.bisect_right(view_timestamps, ts_ns) - 1
-    # 如果 ts_ns 比第一张 view 还早，取第一张；否则取 idx
-    target_view = views[max(0, idx)]
+    if idx < 0:
+        raise ValueError("cannot find target view.")
+    target_view = views[idx]
     return _get_mid(target_view)
 
 
