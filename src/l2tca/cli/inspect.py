@@ -6,11 +6,54 @@ import argparse
 import time
 from collections import Counter
 
+from l2tca.book.order_book import OrderBook
+from l2tca.book.sequence import verify_checksum
 from l2tca.feed.messages import BookSnapshot, BookUpdate
 from l2tca.feed.parser import parse
 from l2tca.feed.replay import iter_records, read_header
 
 __all__ = ["run"]
+
+
+class _Verifier:
+    """Replays the book alongside the summary and checks each frame's CRC32.
+
+    Kraken sends no per-frame sequence number, so the checksum is the only
+    evidence that a reconstruction has not silently drifted. Counting how many
+    frames agree is therefore a statement about the order book, not about the
+    capture -- which is why it is opt-in rather than part of every summary.
+    """
+
+    def __init__(self, symbol: str, depth: int, price_precision: int, qty_precision: int) -> None:
+        self.book = OrderBook(symbol, depth=depth)
+        self.precisions = (price_precision, qty_precision)
+        self.checked = 0
+        self.agreed = 0
+        self.uncheckable = 0
+        self.ready = False
+
+    def feed(self, frame: BookSnapshot | BookUpdate) -> None:
+        if isinstance(frame, BookSnapshot):
+            self.book.apply_snapshot(frame)
+            self.ready = True
+            return
+        if not self.ready:
+            self.uncheckable += 1  # updates before the opening snapshot
+            return
+        self.book.apply_update(frame)
+        if frame.checksum is None:
+            self.uncheckable += 1
+            return
+        bids, asks = self.book.depth_levels(10)
+        self.checked += 1
+        self.agreed += verify_checksum(bids, asks, frame.checksum, *self.precisions)
+
+    def report(self) -> str:
+        if not self.checked:
+            return "checksums     : none to check (no snapshot, or no checksum field)"
+        rate = 100.0 * self.agreed / self.checked
+        skipped = f", {self.uncheckable} uncheckable" if self.uncheckable else ""
+        return f"checksums     : {self.agreed}/{self.checked} verified ({rate:.2f}%){skipped}"
 
 
 def run(args: argparse.Namespace) -> int:
@@ -22,6 +65,11 @@ def run(args: argparse.Namespace) -> int:
     seq_gaps = 0
     expected_seq = None
     levels = 0
+    verifier = (
+        _Verifier(args.symbol, args.depth, args.price_precision, args.qty_precision)
+        if getattr(args, "verify", False)
+        else None
+    )
 
     for record in iter_records(args.file):
         if record.control is not None:
@@ -44,6 +92,8 @@ def run(args: argparse.Namespace) -> int:
         kinds[type(parsed).__name__] += 1
         if isinstance(parsed, BookSnapshot | BookUpdate):
             levels += len(parsed.bids) + len(parsed.asks)
+            if verifier is not None:
+                verifier.feed(parsed)
 
     span_s = (last_ns - first_ns) / 1e9 if first_ns is not None and last_ns is not None else 0.0
     total = sum(kinds.values())
@@ -61,6 +111,8 @@ def run(args: argparse.Namespace) -> int:
     print(f"largest gap   : {max_gap_ns / 1e6:.1f} ms")
     print(f"seq gaps      : {seq_gaps}")
     print(f"price levels  : {levels}")
+    if verifier is not None:
+        print(verifier.report())
     for name, count in kinds.most_common():
         print(f"  {name:<20}{count:>10}")
     for name, count in controls.most_common():

@@ -74,6 +74,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     ins = sub.add_parser("inspect", help="summarise a capture")
     ins.add_argument("file", type=Path)
+    ins.add_argument(
+        "--verify",
+        action="store_true",
+        help="rebuild the book and check every frame against its CRC32",
+    )
+    ins.add_argument("--symbol", default="BTC/USD", help="pair, for --verify")
+    ins.add_argument("--depth", type=int, default=100, choices=VALID_DEPTHS)
+    ins.add_argument("--price-precision", type=int, default=1, help="quote decimals, for --verify")
+    ins.add_argument("--qty-precision", type=int, default=8, help="base decimals, for --verify")
 
     rep = sub.add_parser("replay", help="replay a capture")
     rep.add_argument("file", type=Path)

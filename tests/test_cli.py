@@ -50,14 +50,18 @@ def test_inspect_summarises_a_capture(capture: Path, capsys: pytest.CaptureFixtu
     assert "depth=100" in out
 
 
-def test_inspect_tolerates_a_headerless_file(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_inspect_tolerates_a_headerless_file(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     path = tmp_path / "bare.jsonl"
     path.write_text(
         json.dumps(
-            {"v": 1, "kind": "msg", "seq": 0, "recv_ns": 1,
-             "recv_wall_ns": 2, "payload": SNAPSHOT_FRAME}
+            {
+                "v": 1,
+                "kind": "msg",
+                "seq": 0,
+                "recv_ns": 1,
+                "recv_wall_ns": 2,
+                "payload": SNAPSHOT_FRAME,
+            }
         )
         + "\n"
     )
@@ -92,8 +96,14 @@ def test_convert_on_a_capture_with_no_book_frames_fails_loudly(
     path = tmp_path / "quiet.jsonl"
     path.write_text(
         json.dumps(
-            {"v": 1, "kind": "msg", "seq": 0, "recv_ns": 1, "recv_wall_ns": 2,
-             "payload": '{"channel":"heartbeat"}'}
+            {
+                "v": 1,
+                "kind": "msg",
+                "seq": 0,
+                "recv_ns": 1,
+                "recv_wall_ns": 2,
+                "payload": '{"channel":"heartbeat"}',
+            }
         )
         + "\n"
     )
@@ -141,9 +151,7 @@ def test_plot_latency_without_a_report_is_a_usage_error(tmp_path: Path) -> None:
 
 
 def test_plot_spread_reports_a_missing_table(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-    assert main(
-        ["plot", "spread", "--root", str(tmp_path), "--out", str(tmp_path / "x.png")]
-    ) == 1
+    assert main(["plot", "spread", "--root", str(tmp_path), "--out", str(tmp_path / "x.png")]) == 1
     assert "cannot plot" in capsys.readouterr().err
 
 
@@ -193,9 +201,7 @@ def test_record_captures_a_session_and_shuts_down_cleanly(
     assert "wrote" in capsys.readouterr().out
 
 
-def test_logs_are_json_on_stderr(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_logs_are_json_on_stderr(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """Human output on stdout, machine events on stderr -- both stay usable alone."""
     main(["synth", "--updates", "10", "--out", str(tmp_path / "s.jsonl")])
     captured = capsys.readouterr()
@@ -208,3 +214,19 @@ def test_logs_are_json_on_stderr(
 def test_log_text_switches_off_json(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     main(["--log-text", "synth", "--updates", "5", "--out", str(tmp_path / "s.jsonl")])
     assert "INFO l2tca.feed.recorder capture_open" in capsys.readouterr().err
+
+
+def test_inspect_verify_checks_every_frame_against_its_checksum(
+    capture: Path, capsys: pytest.CaptureFixture
+) -> None:
+    assert main(["inspect", str(capture), "--verify"]) == 0
+    out = capsys.readouterr().out
+    assert "checksums" in out
+
+
+def test_inspect_without_verify_does_not_rebuild_the_book(
+    capture: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Summarising a capture is a statement about the file, not about the book."""
+    assert main(["inspect", str(capture)]) == 0
+    assert "checksums" not in capsys.readouterr().out
