@@ -83,7 +83,17 @@ def micro_price(view: BookView) -> float:
     toward the price that side will reach. It reduces to the arithmetic mid
     when the two sizes are equal.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    bids = view.bids
+    asks = view.asks
+    if not bids or not asks:
+        return float('nan')
+    bid_price = float(bids[0].price)
+    ask_price = float(asks[0].price)
+    bid_qty = float(bids[0].qty)
+    ask_qty = float(asks[0].qty)
+
+    return ((bid_price * ask_qty) + (ask_price * bid_qty)) / (bid_qty + ask_qty)
+    
 
 
 def quoted_spread(view: BookView, *, in_bps: bool = True) -> float:
@@ -103,6 +113,8 @@ def quoted_spread(view: BookView, *, in_bps: bool = True) -> float:
     regimes; the absolute number is not.
     """
     raise NotImplementedError("core logic: implement by hand")
+    
+
 
 
 def effective_spread(
