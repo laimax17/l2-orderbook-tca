@@ -12,6 +12,16 @@ signals, and four execution-cost measures. See [The core](#the-core).
 Read-only against the exchange's public feed. There is no authenticated
 endpoint, no order entry, and no broker credential anywhere in the repository.
 
+**Want to write the algorithms yourself?** The
+[`template`](https://github.com/laimax17/l2-orderbook-tca/tree/template) branch
+is this repository with the four core modules removed — infrastructure complete
+and green, the algorithms left as signatures, docstrings and 84 red tests, and
+the design questions reopened so the decisions are yours rather than inherited.
+
+```bash
+git clone -b template https://github.com/laimax17/l2-orderbook-tca
+```
+
 ---
 
 ## Architecture
