@@ -33,8 +33,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from decimal import Decimal
 
-from l2tca.book.types import BookView
+from l2tca.book.types import BookView, Side
 from l2tca.tca.types import Fill, Order
+import bisect
 
 __all__ = [
     "arrival_price",
@@ -67,14 +68,9 @@ def arrival_price(order: Order, views: Sequence[BookView]) -> Decimal:
         raise ValueError("Empty view.")
     t = order.decision_ns
     valid_views = [v for v in views if v.recv_ns <= t]
-    print('==============================================================================================================')
-    print(t)
-    # print(valid_views)
     if not valid_views:
         raise ValueError("No valid view.")
     target_view = valid_views[-1]
-    print(target_view)
-    print('==============================================================================================================')
     p_b = target_view.bids[0].price
     p_a = target_view.asks[0].price
     return (p_a + p_b) / Decimal("2")
@@ -104,7 +100,42 @@ def interval_vwap(
         ValueError: ``end_ns <= start_ns``, the volumes sum to zero, or every
             bucket was skipped for want of a view at or before it.
     """
-    raise NotImplementedError("core logic: implement by hand")
+
+    if end_ns <= start_ns:
+        raise ValueError("Invalid time window.")
+
+    if not views or not volumes:
+        raise ValueError("Views or Volumes cannot be empty.")
+
+    view_ts = [v.recv_ns for v in views]
+
+    total_pv = Decimal('0')
+    total_volume = Decimal('0')
+    valid_buckets = 0
+
+    for ts_ns, vol in volumes:
+        if not (start_ns <= ts_ns <= end_ns):
+            continue
+        idx = bisect.bisect_right(view_ts, ts_ns) - 1
+        if idx < 0:
+            continue
+
+        target_view = views[idx]
+        p_b = target_view.bids[0].price
+        p_a = target_view.asks[0].price
+        p_mid = (p_b + p_a) / Decimal('2')
+
+        total_pv += p_mid * vol
+        total_volume += vol
+        valid_buckets  += 1
+
+    if valid_buckets == 0:
+        raise ValueError("No valid bucket.")
+
+    if total_volume == Decimal('0'):
+        raise ValueError('Total volume is 0.')
+
+    return total_pv/total_volume
 
 
 def simulate_child_orders(
@@ -139,7 +170,72 @@ def simulate_child_orders(
     still unfilled when the window closes stays unfilled -- its cost is
     opportunity cost, and belongs in :func:`attribute_slippage`.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    if not views or start_ns >= end_ns or order.target_qty <= Decimal("0"):
+        return []
+
+    time_step = (end_ns - start_ns) // slices
+    schedule_times = [start_ns + i * time_step for i in range(slices)]
+
+    base_slice_qty = order.target_qty / Decimal(slices)
+    remaining_total_qty = order.target_qty
+    carry_over_qty = Decimal("0") 
+
+    fills: list[Fill] = []
+    view_timestamps = [v.recv_ns for v in views]
+    is_buy = order.side == Side('bid')
+
+    for t_ns in schedule_times:
+        if remaining_total_qty <= Decimal("0"):
+            break
+
+        target_qty = min(base_slice_qty + carry_over_qty, remaining_total_qty)
+
+        idx = bisect.bisect_right(view_timestamps, t_ns) - 1
+        if idx < 0:
+            carry_over_qty = target_qty
+            continue
+
+        curr_view = views[idx]
+        depth = curr_view.asks if is_buy else curr_view.bids
+
+        filled_in_this_slice = Decimal("0")
+
+        for level in depth:
+            needed = target_qty - filled_in_this_slice
+            if needed <= Decimal("0"):
+                break
+
+            take_qty = min(needed, level.qty)
+            if take_qty > Decimal("0"):
+                fills.append(
+                    Fill(
+                        price=level.price,
+                        qty=take_qty,
+                        ts_ns=curr_view.recv_ns,
+                    )
+                )
+                filled_in_this_slice += take_qty
+
+        remaining_total_qty -= filled_in_this_slice
+        carry_over_qty = target_qty - filled_in_this_slice
+
+    return fills
+
+
+def _get_mid(view: BookView) -> Decimal:
+    """Get view mid price"""
+    return (view.bids[0].price + view.asks[0].price) / Decimal("2")
+
+
+def _find_view_mid_at(ts_ns: int, views: Sequence[BookView]) -> Decimal:
+    """
+    Find the last view where recv_ns <= ts_ns.
+    """
+    view_timestamps = [v.recv_ns for v in views]
+    idx = bisect.bisect_right(view_timestamps, ts_ns) - 1
+    # 如果 ts_ns 比第一张 view 还早，取第一张；否则取 idx
+    target_view = views[max(0, idx)]
+    return _get_mid(target_view)
 
 
 def attribute_slippage(
@@ -147,34 +243,54 @@ def attribute_slippage(
     fills: Sequence[Fill],
     views: Sequence[BookView],
 ) -> dict[str, float]:
-    """Decompose the execution's cost into four layers that sum to the total.
+    """Decompose the execution's cost into four layers that sum to the total."""
+    if not views:
+        raise ValueError("views sequence cannot be empty")
 
-    In currency, before scaling::
+    d = Decimal("1") if order.side == Side('bid') else Decimal("-1")
 
-        spread_ccy       =  sum over fills of  qi * (Pi - Mi) * d
-        timing_ccy       =  sum over fills of  qi * (Mi - P0) * d
-        fees_ccy         =  sum over fills of  fee_i
-        opportunity_ccy  =  (Qt - Q) * (Pend - P0) * d
+    Q_t = order.target_qty
 
-    The first two sum by construction rather than by approximation, since
-    ``(Pi - Mi) + (Mi - P0)`` collapses to ``(Pi - P0)``; fees and opportunity
-    cost complete the shortfall. A decomposition with a residual is not one.
+    P0 = _find_view_mid_at(order.decision_ns, views)
 
-    Every layer is divided by the same denominator, the *target* notional
-    ``Qt * P0``, and scaled to basis points. Dividing by filled notional instead
-    makes a badly underfilled order look cheap -- precisely the case shortfall
-    exists to penalise -- and layers with different denominators cannot add up.
+    P_end = _get_mid(views[-1])
 
-    Returns:
-        ``spread_bps``, ``timing_bps``, ``fees_bps``, ``opportunity_bps`` and
-        ``total_bps``. All five keys are present whether or not anything filled;
-        with no fills the first three are zero and opportunity carries the whole
-        order.
+    target_notional = Q_t * P0
 
-    Market impact is deliberately absent. Separating the move this order caused
-    from the move the market would have made anyway needs a control or a trade
-    feed, and neither exists here, so the move is reported whole as ``timing``.
-    A number labelled "impact" produced without either would look authoritative
-    and mean nothing.
-    """
-    raise NotImplementedError("core logic: implement by hand")
+    spread_ccy = Decimal("0")
+    timing_ccy = Decimal("0")
+    fees_ccy = Decimal("0")
+    Q_filled = Decimal("0")
+
+    for fill in fills:
+        q_i = fill.qty
+        P_i = fill.price
+        fee_i = getattr(fill, "fee", Decimal("0"))
+
+        M_i = _find_view_mid_at(fill.ts_ns, views)
+
+        spread_ccy += q_i * (P_i - M_i) * d
+        timing_ccy += q_i * (M_i - P0) * d
+        fees_ccy += fee_i
+
+        Q_filled += q_i
+
+    unfilled_qty = Q_t - Q_filled
+    opportunity_ccy = unfilled_qty * (P_end - P0) * d
+
+    bps_scale = Decimal("10000") / target_notional
+
+    spread_bps = float(spread_ccy * bps_scale)
+    timing_bps = float(timing_ccy * bps_scale)
+    fees_bps = float(fees_ccy * bps_scale)
+    opportunity_bps = float(opportunity_ccy * bps_scale)
+
+    total_bps = spread_bps + timing_bps + fees_bps + opportunity_bps
+
+    return {
+        "spread_bps": spread_bps,
+        "timing_bps": timing_bps,
+        "fees_bps": fees_bps,
+        "opportunity_bps": opportunity_bps,
+        "total_bps": total_bps,
+    }
