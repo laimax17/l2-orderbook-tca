@@ -30,7 +30,64 @@ git clone -b template https://github.com/laimax17/l2-orderbook-tca
 
 ## Architecture
 
-<!-- TODO: architecture diagram goes here. -->
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 460, "nodeSpacing": 45, "rankSpacing": 45, "curve": "basis"}}}%%
+flowchart TB
+    KRAKEN(["<b>Kraken WebSocket v2</b> — book · depth=100 · CRC32 on every frame"])
+
+    CLIENT["<b>feed/client.py</b><br/>subscribe · heartbeat · full-jitter reconnect · staleness watchdog<br/>stamps every frame: recv_ns = perf_counter_ns(), recv_wall_ns = time_ns()"]
+
+    CAP["<b>feed/recorder.py → data/raw/*.jsonl.gz → feed/replay.py</b><br/>lossless capture, payloads never re-serialised<br/>replayed at the original inter-arrival gaps"]
+
+    SRC(["<b>feed/source.py — MessageSource</b><br/>live and replay both satisfy it, so nothing below this line can tell them apart"])
+
+    PARSE["<b>feed/parser.py</b> — parse_float=Decimal, so the wire digits reach the checksum unrounded"]
+
+    SEQ["<b>book/sequence.py</b><br/>disconnected → resyncing → live · buffers updates while a snapshot is in flight"]
+
+    OB["<b>book/order_book.py</b><br/>two SortedDict sides · apply_update is transactional, undo log on reject"]
+
+    VIEW(["<b>BookView</b> — immutable, best-first"])
+
+    SIG["<b>signals/</b><br/>imbalance<br/>micro-price<br/>quoted and effective spread"]
+    TCA["<b>tca/</b><br/>arrival benchmark<br/>interval VWAP<br/>TWAP children<br/>four-layer attribution"]
+    STORE["<b>io/</b><br/>pinned Arrow schemas<br/>hive symbol= / date= / hour="]
+    BENCH["<b>bench/</b> — wraps parse → apply_update → view(10)<br/>recv → book-updated, p50/p90/p99/p99.9 + histogram<br/>warmup and snapshot rebuilds excluded"]
+
+    PQ[("<b>data/parquet/</b> — tick · snapshot · signal")]
+    PLOT["<b>plot/</b> — depth ladder · spread series · latency histogram"]
+
+    KRAKEN --> CLIENT
+    CLIENT -->|live| SRC
+    CLIENT --> CAP -->|offline| SRC
+    SRC --> PARSE --> SEQ -->|apply| OB
+    OB -->|"CRC32 agrees"| VIEW
+    OB -->|"drift — resubscribe for a fresh snapshot"| CLIENT
+    VIEW --> SIG
+    VIEW --> TCA
+    VIEW --> STORE
+    VIEW -.-> BENCH
+    SIG --> STORE
+    STORE --> PQ --> PLOT
+    BENCH --> PLOT
+```
+
+Two things in that picture are the whole design, and both are easy to miss.
+
+**Live and replay converge above the book.** `client.py` feeds the recorder and
+the parser from the same stamped frames, and `replay.py` re-enters through the
+same `MessageSource`. Nothing below that line — not the book, not the signals,
+not the benchmark — can tell which one it is running against, so a bug seen once
+on the wire can be reproduced from a file exactly, forever. Replay at `speed=0`
+with the recorded timestamps kept makes a run a pure function of the capture.
+
+**The exchange checks the reconstruction, not the author.** Kraken sends no
+per-frame sequence number; what it sends is a CRC32 over the top ten levels of
+each side, recomputed on every frame. The book recomputes it and compares. A
+mismatch means the two books have diverged, and the only honest response is to
+throw the local one away and resubscribe — which is the edge looping back to
+`client.py`. This is why the results table can claim 23,602 of 23,602 frames
+verified rather than "the tests pass".
 
 ## Scope
 
