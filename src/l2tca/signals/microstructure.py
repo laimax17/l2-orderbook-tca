@@ -112,9 +112,18 @@ def quoted_spread(view: BookView, *, in_bps: bool = True) -> float:
     larger. Expressing it in basis points makes it comparable across price
     regimes; the absolute number is not.
     """
-    raise NotImplementedError("core logic: implement by hand")
-    
+    bids = view.bids
+    asks = view.asks
+    if not bids or not asks:
+        return float('nan')
+    bid_price = float(bids[0].price)
+    ask_price = float(asks[0].price)
 
+    if in_bps:
+        mid_price = (bid_price + ask_price) / 2
+        return 10000 * (ask_price - bid_price) / mid_price
+    else:
+        return ask_price - bid_price
 
 
 def effective_spread(
@@ -146,4 +155,22 @@ def effective_spread(
     fills arrive on different paths -- is part of the TCA design work in
     :mod:`l2tca.tca.analysis`.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    if not view.bids or not view.asks:
+        return float('nan')
+    p_b = float(view.bids[0].price)
+    p_a = float(view.asks[0].price)
+    p_mid = (p_a + p_b) / 2.0
+    
+    p_fill = float(fill_price)
+
+    d = 1.0 if side == Side('bid') else -1.0
+
+    eff_spread = 2.0 * d * (p_fill - p_mid)
+
+    if not in_bps:
+        return eff_spread
+
+    if p_mid == 0:
+        return 0.0
+
+    return 10000.0 * (eff_spread / p_mid)
