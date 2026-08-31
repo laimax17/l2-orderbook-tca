@@ -81,7 +81,13 @@ def arrival_price(order: Order, views: Sequence[BookView]) -> Decimal:
         ValueError: Decide what makes the benchmark uncomputable, and say so
             rather than returning a number that looks usable.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    
+    # instant: decision time
+    # price: mid price
+    # last frame recv_ns <= decision time
+    t = order.decision_ns
+    
+
 
 
 def interval_vwap(
