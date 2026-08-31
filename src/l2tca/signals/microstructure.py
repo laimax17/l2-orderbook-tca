@@ -50,7 +50,20 @@ def order_book_imbalance(view: BookView, levels: int = 1) -> float:
     ``levels`` grows -- deeper quantity is less likely to trade and cheaper to
     post, so it is both less informative and easier to fake.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    bids = view.bids
+    asks = view.asks
+
+    qty_asks = 0
+    qty_bids = 0
+
+    for i in range(levels):
+        if i < len(bids):
+            qty_bids += float(bids[i].qty)
+        if i < len(asks):
+            qty_asks += float(asks[i].qty)
+    if qty_bids == 0 and qty_asks == 0:
+        return float('nan')
+    return (qty_bids - qty_asks) / (qty_asks + qty_bids)
 
 
 def micro_price(view: BookView) -> float:
@@ -70,7 +83,17 @@ def micro_price(view: BookView) -> float:
     toward the price that side will reach. It reduces to the arithmetic mid
     when the two sizes are equal.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    bids = view.bids
+    asks = view.asks
+    if not bids or not asks:
+        return float('nan')
+    bid_price = float(bids[0].price)
+    ask_price = float(asks[0].price)
+    bid_qty = float(bids[0].qty)
+    ask_qty = float(asks[0].qty)
+
+    return ((bid_price * ask_qty) + (ask_price * bid_qty)) / (bid_qty + ask_qty)
+
 
 
 def quoted_spread(view: BookView, *, in_bps: bool = True) -> float:
@@ -89,7 +112,18 @@ def quoted_spread(view: BookView, *, in_bps: bool = True) -> float:
     larger. Expressing it in basis points makes it comparable across price
     regimes; the absolute number is not.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    bids = view.bids
+    asks = view.asks
+    if not bids or not asks:
+        return float('nan')
+    bid_price = float(bids[0].price)
+    ask_price = float(asks[0].price)
+
+    if in_bps:
+        mid_price = (bid_price + ask_price) / 2
+        return 10000 * (ask_price - bid_price) / mid_price
+    else:
+        return ask_price - bid_price
 
 
 def effective_spread(
@@ -121,4 +155,22 @@ def effective_spread(
     fills arrive on different paths -- is part of the TCA design work in
     :mod:`l2tca.tca.analysis`.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    if not view.bids or not view.asks:
+        return float('nan')
+    p_b = float(view.bids[0].price)
+    p_a = float(view.asks[0].price)
+    p_mid = (p_a + p_b) / 2.0
+
+    p_fill = float(fill_price)
+
+    d = 1.0 if side == Side('bid') else -1.0
+
+    eff_spread = 2.0 * d * (p_fill - p_mid)
+
+    if not in_bps:
+        return eff_spread
+
+    if p_mid == 0:
+        return 0.0
+
+    return 10000.0 * (eff_spread / p_mid)

@@ -106,8 +106,9 @@ def test_bench_prints_a_table(capture: Path, capsys: pytest.CaptureFixture) -> N
     captured = capsys.readouterr()
     assert "latency per call, microseconds" in captured.out
     assert "recv -> book-updated" in captured.out
-    assert "not implemented" in captured.out  # the book stubs
-    assert "book stages are unimplemented" in captured.err
+    # The book is implemented, so the table carries numbers rather than excuses.
+    assert "not implemented" not in captured.out
+    assert captured.err == ""
 
 
 def test_bench_json_output_is_machine_readable(

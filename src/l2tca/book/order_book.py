@@ -44,6 +44,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from sortedcontainers import SortedDict
+
 from l2tca.book.types import BookView, Level, Side
 from l2tca.feed.messages import BookSnapshot, BookUpdate
 
@@ -62,8 +64,8 @@ class OrderBook:
         self.symbol = symbol
         self.depth = depth
         self.seq = 0
-
-    # -- mutation ----------------------------------------------------------
+        self.asks = SortedDict()
+        self.bids = SortedDict()
 
     def apply_snapshot(self, snapshot: BookSnapshot) -> None:
         """Load a full book state.
@@ -77,7 +79,28 @@ class OrderBook:
             non-positive quantity). Is that something to absorb or to raise on?
           - How does ``seq`` relate to snapshots versus updates?
         """
-        raise NotImplementedError("core logic: implement by hand")
+
+
+        bids = SortedDict()
+        asks = SortedDict()
+
+        for price, qty in snapshot.bids:
+            if qty <= 0:
+                raise ValueError(f"snapshot bid at {price} has non-positive qty {qty}")
+            bids[price] = Level(price, qty)
+
+        for price, qty in snapshot.asks:
+            if qty <= 0:
+                raise ValueError(f"snapshot ask at {price} has non-positive qty {qty}")
+            asks[price] = Level(price, qty)
+
+        if bids and asks and bids.keys()[-1] >= asks.keys()[0]:
+            raise ValueError(f"crossed snapshot: bid {bids.keys()[-1]} >= ask {asks.keys()[0]}")
+
+        self.bids = bids
+        self.asks = asks
+        self.seq += 1
+
 
     def apply_update(self, update: BookUpdate) -> None:
         """Apply one incremental frame: adds, modifies and deletes, mixed.
@@ -97,23 +120,76 @@ class OrderBook:
           - After the frame is applied, is the book still bounded by ``depth``?
             What makes it so?
         """
-        raise NotImplementedError("core logic: implement by hand")
+
+        undo: list[tuple[SortedDict, Decimal, Level | None]] = []
+
+        try:
+            for side, levels in ((self.bids, update.bids), (self.asks, update.asks)):
+                for price, qty in levels:
+                    if qty < 0:
+                        raise ValueError(f"negative qty {qty} at {price}")
+                    undo.append((side, price, side.get(price)))
+                    if qty == 0:
+                        # A delete for a price outside the depth window is normal.
+                        side.pop(price, None)
+                    else:
+                        side[price] = Level(price, qty)
+
+            # Trim the levels that fell out of the window. Only ever the worst
+            # ones, so the touch -- and the crossed check below -- is unaffected.
+            while len(self.bids) > self.depth:
+                worst = self.bids.keys()[0]
+                undo.append((self.bids, worst, self.bids[worst]))
+                self.bids.pop(worst)
+            while len(self.asks) > self.depth:
+                worst = self.asks.keys()[-1]
+                undo.append((self.asks, worst, self.asks[worst]))
+                self.asks.pop(worst)
+
+            # Checked once, against the whole frame. Kraken lifts both sides in
+            # a single update, so judging each level against the half-applied
+            # book would reject frames the exchange published.
+            if self.best_bid and self.best_ask and self.best_bid.price >= self.best_ask.price:
+                raise ValueError(
+                    f"crossed after update: bid {self.best_bid.price} >= ask {self.best_ask.price}"
+                )
+        except ValueError:
+            # Reversed, so a price touched twice in one frame is restored to
+            # what it held before the frame, not to its mid-frame value.
+            for side, price, previous in reversed(undo):
+                if previous is None:
+                    side.pop(price, None)
+                else:
+                    side[price] = previous
+            raise
+
+        self.seq += 1
 
     def clear(self) -> None:
         """Drop all state. Called on disconnect, before the replacement snapshot."""
-        raise NotImplementedError("core logic: implement by hand")
+        # seq deliberately survives. It identifies views for the life of this
+        # book, and restarting it would emit duplicate book_seq values into the
+        # snapshot table on either side of a reconnect.
+        self.asks = SortedDict()
+        self.bids = SortedDict()
 
     # -- reads -------------------------------------------------------------
 
     @property
     def best_bid(self) -> Level | None:
         """Highest resting bid, or ``None`` on an empty side. Target: O(1)."""
-        raise NotImplementedError("core logic: implement by hand")
+        if not self.bids:
+            return None
+        price = self.bids.keys()[-1]
+        return self.bids[price]
 
     @property
     def best_ask(self) -> Level | None:
         """Lowest resting ask, or ``None`` on an empty side. Target: O(1)."""
-        raise NotImplementedError("core logic: implement by hand")
+        if not self.asks:
+            return None
+        price = self.asks.keys()[0]
+        return self.asks[price]
 
     @property
     def mid(self) -> Decimal | None:
@@ -121,21 +197,53 @@ class OrderBook:
 
         Question: when is it not defined, and what should the caller get then?
         """
-        raise NotImplementedError("core logic: implement by hand")
+        if len(self.bids) > 0 and len(self.asks) > 0:
+            return (self.best_bid.price + self.best_ask.price) / 2
+        return None
 
     @property
     def spread(self) -> Decimal | None:
         """Quoted spread, or ``None`` when it is not defined."""
-        raise NotImplementedError("core logic: implement by hand")
+        if self.bids and self.asks:
+            return (self.best_ask.price - self.best_bid.price)
+        return None
 
-    def depth_levels(self, n: int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
+    def depth_levels(self, n:int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
         """Top ``n`` levels per side, best first, as ``(bids, asks)``.
 
         Questions:
           - What comes back when a side holds fewer than ``n`` levels?
           - Callers keep these tuples. What does that require of what you return?
         """
-        raise NotImplementedError("core logic: implement by hand")
+
+        # get top n bids
+        if len(self.bids) <= n:
+            top_bids = []
+            for x in self.bids:
+                top_bids.append(Level(x,self.bids[x].qty))
+            top_bids = top_bids[::-1]
+            top_bids = tuple(top_bids)
+        else:
+            top_bids = []
+            bids_keys = self.bids.keys()
+            for i in range(1,n+1):
+                top_bids.append(Level(bids_keys[-i],self.bids[bids_keys[-i]].qty))
+            top_bids = tuple(top_bids)
+
+        # get bottom n bids
+        if len(self.asks) <= n:
+            top_asks = []
+            for x in self.asks:
+                top_asks.append(Level(x,self.asks[x].qty))
+            top_asks = tuple(top_asks)
+        else:
+            top_asks = []
+            asks_keys = self.asks.keys()
+            for i in range(n):
+                top_asks.append(Level(asks_keys[i],self.asks[asks_keys[i]].qty))
+            top_asks = tuple(top_asks)
+
+        return (top_bids,top_asks)
 
     def view(
         self,
@@ -152,7 +260,20 @@ class OrderBook:
         book. On the per-frame path, so its cost is part of the representation
         question above.
         """
-        raise NotImplementedError("core logic: implement by hand")
+        if n is None:
+            n = self.depth
+        bids, asks = self.depth_levels(n)
+
+        return BookView(
+            symbol = self.symbol,
+            seq = self.seq,
+            recv_ns = recv_ns,
+            recv_wall_ns = recv_wall_ns,
+            exchange_ts_ns = exchange_ts_ns,
+            checksum_ok = checksum_ok,
+            bids = bids,
+            asks = asks
+        )
 
     def quantity_to_price(self, side: Side, price: Decimal) -> Decimal:
         """Resting quantity on ``side`` at or better than ``price``.
@@ -161,4 +282,10 @@ class OrderBook:
 
         Question: what does "or better" mean on each side?
         """
-        raise NotImplementedError("core logic: implement by hand")
+
+        if side == Side.BID:
+            return sum(self.bids[p].qty for p in self.bids if p >= price)
+        elif side == Side.ASK:
+            return sum(self.asks[p].qty for p in self.asks if p <= price)
+        else:
+            raise ValueError("Invalid Side value")
