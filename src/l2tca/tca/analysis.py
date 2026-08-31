@@ -1,51 +1,31 @@
 """Execution cost analysis. CORE LOGIC -- NOT IMPLEMENTED.
 
-# ---------------------------------------------------------------------------
-# Design questions you have to settle before any of this can be written. They
-# are not answered anywhere in this repository, on purpose: every one of them
-# changes what the numbers mean, and inheriting someone else's choice is how a
-# TCA report ends up confidently measuring the wrong thing.
-#
-# 1. ARRIVAL PRICE
-#    Which instant, and which price at that instant?
-#      - the instant: the decision, the order's arrival at the venue, the first
-#        fill, something else? They differ by the latency you are trying to
-#        measure, which is the point.
-#      - the price: mid, touch on the trading side, micro-price, a average
-#        over a short window? Each answers a different question about what
-#        "the price when we started" means.
-#      - the book updates continuously; a fill lands between two updates. Which
-#        view counts as contemporaneous, and does the rule differ for the
-#        arrival benchmark and for per-fill benchmarks?
-#
-# 2. CHILD ORDER SIMULATION
-#      - how is the parent split: fixed slices, fixed intervals, participation
-#        rate, something adaptive?
-#      - when does a child fill? Only when it crosses? Does a resting child
-#        ever fill, and on what evidence, given that the book channel carries
-#        no trade prints?
-#      - what happens to a child the book cannot fill -- does it rest, cancel,
-#        or re-price?
-#      - what does an unfilled remainder at the end of the horizon cost?
-#
-# 3. SLIPPAGE ATTRIBUTION
-#      - how many layers, and which? (spread cost, market impact, timing /
-#        delay, fees, opportunity cost are all candidates -- the question is
-#        which ones you can actually separate with the data you have.)
-#      - do the layers sum exactly to the total, or is there a residual? A
-#        decomposition that does not add up is not a decomposition.
-#      - what is the denominator, and is it the same for every layer?
-#      - what is the sign convention, and does it hold for both sides of the
-#        market?
-#
-# Whatever you decide, write it down in docs/ before you write the code. The
-# decisions are the interesting part; the arithmetic is not.
-# ---------------------------------------------------------------------------
+The design decisions this module rests on are settled and written up in
+``docs/CORE.md`` section 4, with the reasoning behind each. They are summarised
+here as rules to implement against; read the reasoning there before changing
+one, and replace the reasoning rather than merely contradicting it.
 
-Scope note: Kraken's ``book`` channel carries no trade prints, so any benchmark
-needing traded volume (a true VWAP, participation rate) needs the ``trade``
-channel, which is outside phase one. :func:`interval_vwap` is specified against
-whatever volume series the caller supplies so the interface is settled now.
+Notation used throughout:
+
+======  ====================================================================
+``d``   ``side.sign`` -- ``+1`` for a buy, ``-1`` for a sell
+``P0``  the arrival mid
+``Mi``  the mid contemporaneous with fill ``i``
+``Q``   quantity filled; ``Qt`` quantity targeted
+======  ====================================================================
+
+**Contemporaneity, everywhere in this module.** The view contemporaneous with an
+instant ``t`` is the last one whose ``recv_ns <= t``. Taking the next view uses a
+book that had not yet arrived, which flatters every number it touches. When no
+view exists at or before ``t``, raise rather than reaching forward.
+
+**Sign, everywhere in this module.** Positive means cost, on both sides of the
+market, via ``d``. Route every measure through the same helper: a per-layer sign
+flip is how a report ends up flattering sells and punishing buys.
+
+Scope note: Kraken's ``book`` channel carries no trade prints. That is why the
+simulator fills aggressively only, and why market impact is not an attribution
+layer -- see ``docs/CORE.md``.
 """
 
 from __future__ import annotations
@@ -65,21 +45,19 @@ __all__ = [
 
 
 def arrival_price(order: Order, views: Sequence[BookView]) -> Decimal:
-    """The benchmark price the execution is measured against.
+    """The mid at ``order.decision_ns``, from the view contemporaneous with it.
 
-    See question 1 at the top of this module. Both parts of it -- which instant
-    and which price -- have to be decided here, and every other number in this
-    module inherits the choice.
+    The decision instant rather than arrival at the venue, so the delay between
+    the two is carried as a cost rather than excused. The mid rather than the
+    touch on the trading side, so that spread cost appears as its own
+    attribution layer instead of being charged silently up front.
 
     Args:
-        order: Carries ``decision_ns``; whether that is the instant you want is
-            part of the question.
-        views: Book views covering the execution window, ascending in
-            ``recv_ns``.
+        views: Book views covering the window, ascending in ``recv_ns``.
 
     Raises:
-        ValueError: Decide what makes the benchmark uncomputable, and say so
-            rather than returning a number that looks usable.
+        ValueError: No view at or before ``order.decision_ns``, or that view has
+            no mid. Reaching forward to the next view would be look-ahead.
     """
     
     # instant: decision time
@@ -96,18 +74,23 @@ def interval_vwap(
     start_ns: int,
     end_ns: int,
 ) -> Decimal:
-    """Volume-weighted benchmark price over ``[start_ns, end_ns]``.
+    """Volume-weighted mid over ``[start_ns, end_ns]``.
+
+    For each bucket, take the mid of the view contemporaneous with its timestamp
+    and weight it by that bucket's volume::
+
+        vwap = sum(volume_i * mid_i) / sum(volume_i)
+
+    Weighting by volume rather than by view is what makes this a market
+    benchmark rather than a description of when the feed happened to be busy.
 
     Args:
-        views: Book views covering the window, ascending in ``recv_ns``.
-        volumes: ``(ts_ns, volume)`` buckets. See the scope note above for where
-            these have to come from.
+        volumes: ``(ts_ns, volume)`` buckets. The ``book`` channel carries no
+            trade prints, so these come from elsewhere -- see the scope note.
 
-    Questions:
-      - Book updates arrive in bursts. What does that do to a weighting scheme
-        that treats every view equally?
-      - Which price from each view enters the average?
-      - What happens to a bucket with no view in it, and to a view in no bucket?
+    Raises:
+        ValueError: ``end_ns <= start_ns``, the volumes sum to zero, or every
+            bucket was skipped for want of a view at or before it.
     """
     raise NotImplementedError("core logic: implement by hand")
 
@@ -117,16 +100,32 @@ def simulate_child_orders(
     views: Sequence[BookView],
     start_ns: int,
     end_ns: int,
+    *,
+    slices: int = 10,
 ) -> list[Fill]:
-    """Simulate working ``order`` across the window, returning the fills.
+    """Work ``order`` across the window on a TWAP schedule, returning the fills.
 
-    See question 2 at the top of this module. The return type is a fill list so
-    the result feeds :func:`attribute_slippage` unchanged; everything about how
-    those fills come to exist is yours to decide.
+    Ten equal slices at equal intervals, unless ``slices`` says otherwise. TWAP
+    because it is a real benchmark strategy with no free parameters, and because
+    the alternatives are unavailable: a VWAP or participation schedule needs
+    traded volume, and an adaptive one would measure a signal rather than an
+    execution.
 
-    Whatever the rules are, they should be visible in the output: a caller
-    cannot tell a conservative fill model from an optimistic one by looking at
-    an average price.
+    **Every child crosses the spread and walks the opposite side.** Without trade
+    prints there is no evidence of when a resting order would have filled, and
+    inferring it needs a queue position that L2 data does not carry -- it
+    aggregates each level, so a quantity could be one order or twenty. This
+    makes the result an upper bound on cost whose assumptions are all visible in
+    the book, rather than a lower one resting on a queue model nothing can
+    validate.
+
+    One :class:`Fill` per book level consumed, at that level's own price: a
+    single averaged fill per slice would hide that the order walked five levels.
+
+    When the visible book cannot fill a slice, fill what is there and carry the
+    remainder to the next one; never extrapolate past the last level. Quantity
+    still unfilled when the window closes stays unfilled -- its cost is
+    opportunity cost, and belongs in :func:`attribute_slippage`.
     """
     raise NotImplementedError("core logic: implement by hand")
 
@@ -136,15 +135,34 @@ def attribute_slippage(
     fills: Sequence[Fill],
     views: Sequence[BookView],
 ) -> dict[str, float]:
-    """Decompose the execution's cost into named components.
+    """Decompose the execution's cost into four layers that sum to the total.
 
-    See question 3 at the top of this module. Returning a ``dict`` rather than a
-    typed result is deliberate: the keys are the decomposition, and naming them
-    here would settle the question for you.
+    In currency, before scaling::
 
-    Two properties worth deciding on explicitly, because they are what a reader
-    will assume without checking:
-      - whether the components sum to the total, and what a residual means;
-      - whether a positive number is a cost or a saving, on both sides.
+        spread_ccy       =  sum over fills of  qi * (Pi - Mi) * d
+        timing_ccy       =  sum over fills of  qi * (Mi - P0) * d
+        fees_ccy         =  sum over fills of  fee_i
+        opportunity_ccy  =  (Qt - Q) * (Pend - P0) * d
+
+    The first two sum by construction rather than by approximation, since
+    ``(Pi - Mi) + (Mi - P0)`` collapses to ``(Pi - P0)``; fees and opportunity
+    cost complete the shortfall. A decomposition with a residual is not one.
+
+    Every layer is divided by the same denominator, the *target* notional
+    ``Qt * P0``, and scaled to basis points. Dividing by filled notional instead
+    makes a badly underfilled order look cheap -- precisely the case shortfall
+    exists to penalise -- and layers with different denominators cannot add up.
+
+    Returns:
+        ``spread_bps``, ``timing_bps``, ``fees_bps``, ``opportunity_bps`` and
+        ``total_bps``. All five keys are present whether or not anything filled;
+        with no fills the first three are zero and opportunity carries the whole
+        order.
+
+    Market impact is deliberately absent. Separating the move this order caused
+    from the move the market would have made anyway needs a control or a trade
+    feed, and neither exists here, so the move is reported whole as ``timing``.
+    A number labelled "impact" produced without either would look authoritative
+    and mean nothing.
     """
     raise NotImplementedError("core logic: implement by hand")
