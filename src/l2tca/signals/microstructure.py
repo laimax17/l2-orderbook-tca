@@ -50,7 +50,20 @@ def order_book_imbalance(view: BookView, levels: int = 1) -> float:
     ``levels`` grows -- deeper quantity is less likely to trade and cheaper to
     post, so it is both less informative and easier to fake.
     """
-    raise NotImplementedError("core logic: implement by hand")
+    bids = view.bids
+    asks = view.asks
+
+    qty_asks = 0
+    qty_bids = 0
+
+    for i in range(levels):
+        if i < len(bids):
+            qty_bids += float(bids[i].qty)
+        if i < len(asks):
+            qty_asks += float(asks[i].qty)
+    if qty_bids == 0 and qty_asks == 0:
+        return float('nan')
+    return (qty_bids - qty_asks) / (qty_asks + qty_bids)
 
 
 def micro_price(view: BookView) -> float:

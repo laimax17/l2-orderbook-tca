@@ -120,11 +120,6 @@ class OrderBook:
             What makes it so?
         """
         
-        # An undo log rather than a copy of the book. A frame touches a handful
-        # of levels; the book holds a hundred. Copying both sides on every frame
-        # to protect against the rare rejected one costs the common case several
-        # times over -- measured at 51us per apply against 9us without it.
-        # Each entry is (side, price, level-that-was-there-or-None).
         undo: list[tuple[SortedDict, Decimal, Level | None]] = []
 
         try:
