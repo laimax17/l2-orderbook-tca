@@ -66,8 +66,14 @@ def synthetic_session(
             {
                 "channel": "status",
                 "type": "update",
-                "data": [{"api_version": "v2", "connection_id": 1, "system": "online",
-                          "version": "2.0.0"}],
+                "data": [
+                    {
+                        "api_version": "v2",
+                        "connection_id": 1,
+                        "system": "online",
+                        "version": "2.0.0",
+                    }
+                ],
             }
         ),
     )
@@ -107,13 +113,17 @@ def synthetic_session(
                     {
                         "symbol": symbol,
                         "bids": [
-                            {"price": float(_fmt(p, price_places)),
-                             "qty": float(_fmt(qty[p], qty_places))}
+                            {
+                                "price": float(_fmt(p, price_places)),
+                                "qty": float(_fmt(qty[p], qty_places)),
+                            }
                             for p in bids
                         ],
                         "asks": [
-                            {"price": float(_fmt(p, price_places)),
-                             "qty": float(_fmt(qty[p], qty_places))}
+                            {
+                                "price": float(_fmt(p, price_places)),
+                                "qty": float(_fmt(qty[p], qty_places)),
+                            }
                             for p in asks
                         ],
                     }
@@ -144,8 +154,10 @@ def synthetic_session(
                     Decimal(1).scaleb(-qty_places)
                 )
             )
-            entry = {"price": float(_fmt(price, price_places)),
-                     "qty": float(_fmt(new_qty, qty_places))}
+            entry = {
+                "price": float(_fmt(price, price_places)),
+                "qty": float(_fmt(new_qty, qty_places)),
+            }
             (touched_bids if side_is_bid else touched_asks).append(entry)
 
         yield (

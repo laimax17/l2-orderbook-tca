@@ -27,8 +27,11 @@ def run(args: argparse.Namespace) -> int:
     recorder = JsonlRecorder(path, config)
 
     print(f"recording {config.wire_symbol} depth={config.depth} -> {path}")
-    print(f"stopping after {args.duration:.0f}s (Ctrl-C to stop early)" if args.duration
-          else "stopping on Ctrl-C")
+    print(
+        f"stopping after {args.duration:.0f}s (Ctrl-C to stop early)"
+        if args.duration
+        else "stopping on Ctrl-C"
+    )
 
     try:
         stats = asyncio.run(_record(config, recorder, args.duration))

@@ -99,10 +99,22 @@ def test_signal_table_is_long_format(tmp_path: Path) -> None:
     with PartitionedParquetWriter(tmp_path, "signal", "BTC-USD") as writer:
         writer.write_rows(
             [
-                {"book_seq": 1, "recv_ns": 1, "recv_wall_ns": BASE_NS,
-                 "name": "obi", "value": 0.25, "levels": 1},
-                {"book_seq": 1, "recv_ns": 1, "recv_wall_ns": BASE_NS,
-                 "name": "micro_price", "value": 64_000.05, "levels": 0},
+                {
+                    "book_seq": 1,
+                    "recv_ns": 1,
+                    "recv_wall_ns": BASE_NS,
+                    "name": "obi",
+                    "value": 0.25,
+                    "levels": 1,
+                },
+                {
+                    "book_seq": 1,
+                    "recv_ns": 1,
+                    "recv_wall_ns": BASE_NS,
+                    "name": "micro_price",
+                    "value": 64_000.05,
+                    "levels": 0,
+                },
             ]
         )
     assert set(read_table(tmp_path, "signal").get_column("name")) == {"obi", "micro_price"}

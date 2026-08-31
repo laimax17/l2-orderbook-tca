@@ -5,6 +5,7 @@
     l2tca inspect  <file>                    summarise a capture
     l2tca replay   <file> --speed 10         replay it, paced or as fast as possible
     l2tca convert  <file> --out data/parquet flatten it into the tick table
+    l2tca signals  <file> --out data/parquet replay it into the snapshot + signal tables
     l2tca bench    <file>                    time recv -> book-updated, per stage
     l2tca plot     depth|spread|latency      render a figure to a PNG
 
@@ -22,8 +23,9 @@ import argparse
 from pathlib import Path
 
 from l2tca import __version__
-from l2tca.cli import bench, convert, inspect, plot, record, replay, synth
+from l2tca.cli import bench, convert, inspect, plot, record, replay, signals, synth
 from l2tca.config import VALID_DEPTHS
+from l2tca.io.derive import DEFAULT_IMBALANCE_LEVELS
 from l2tca.logging import configure_logging
 
 __all__ = ["build_parser", "main"]
@@ -34,6 +36,7 @@ _HANDLERS = {
     "inspect": inspect.run,
     "replay": replay.run,
     "convert": convert.run,
+    "signals": signals.run,
     "bench": bench.run,
     "plot": plot.run,
 }
@@ -102,6 +105,26 @@ def build_parser() -> argparse.ArgumentParser:
     con.add_argument("--out", type=Path, default=None, help="parquet root (default: data/parquet)")
     con.add_argument("--limit", type=int, default=None, help="stop after N book frames")
     con.add_argument("--rows-per-file", type=int, default=250_000)
+
+    sig = sub.add_parser("signals", help="replay a capture into the snapshot and signal tables")
+    sig.add_argument("file", type=Path)
+    sig.add_argument("--out", type=Path, default=None, help="parquet root (default: data/parquet)")
+    sig.add_argument("--symbol", default="BTC/USD")
+    sig.add_argument("--depth", type=int, default=100, choices=VALID_DEPTHS)
+    sig.add_argument(
+        "--levels", type=int, default=10, help="book depth carried into the snapshot table"
+    )
+    sig.add_argument(
+        "--imbalance-levels",
+        type=int,
+        nargs="*",
+        default=list(DEFAULT_IMBALANCE_LEVELS),
+        help="depths to report order book imbalance at",
+    )
+    sig.add_argument("--price-precision", type=int, default=1)
+    sig.add_argument("--qty-precision", type=int, default=8)
+    sig.add_argument("--limit", type=int, default=None, help="stop after N frames")
+    sig.add_argument("--rows-per-file", type=int, default=500_000)
 
     ben = sub.add_parser("bench", help="time recv -> book-updated against a capture")
     ben.add_argument("file", type=Path)

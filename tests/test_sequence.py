@@ -131,8 +131,7 @@ def test_the_checksum_depends_on_the_book() -> None:
     other = levels([("100.0", "2")])
     # Whatever the true checksum of `one` is, `other` must not also match it.
     assert not all(
-        verify_checksum(side, asks, expected, 1, 8)
-        for side, expected in ((one, 7), (other, 7))
+        verify_checksum(side, asks, expected, 1, 8) for side, expected in ((one, 7), (other, 7))
     )
 
 

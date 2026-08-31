@@ -95,9 +95,7 @@ class KrakenFeedClient:
 
                 first_req_id = self._req_id + 1
                 self._req_id += len(self.config.channels)
-                for message in await handshake(
-                    self._conn, self.config, first_req_id, self._stamp
-                ):
+                for message in await handshake(self._conn, self.config, first_req_id, self._stamp):
                     yield message
                 self._emit("resubscribed" if attempt else "subscribed")
 

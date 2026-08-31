@@ -80,7 +80,6 @@ class OrderBook:
           - How does ``seq`` relate to snapshots versus updates?
         """
 
-
         bids = SortedDict()
         asks = SortedDict()
 
@@ -100,7 +99,6 @@ class OrderBook:
         self.bids = bids
         self.asks = asks
         self.seq += 1
-
 
     def apply_update(self, update: BookUpdate) -> None:
         """Apply one incremental frame: adds, modifies and deletes, mixed.
@@ -205,10 +203,10 @@ class OrderBook:
     def spread(self) -> Decimal | None:
         """Quoted spread, or ``None`` when it is not defined."""
         if self.bids and self.asks:
-            return (self.best_ask.price - self.best_bid.price)
+            return self.best_ask.price - self.best_bid.price
         return None
 
-    def depth_levels(self, n:int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
+    def depth_levels(self, n: int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
         """Top ``n`` levels per side, best first, as ``(bids, asks)``.
 
         Questions:
@@ -220,30 +218,30 @@ class OrderBook:
         if len(self.bids) <= n:
             top_bids = []
             for x in self.bids:
-                top_bids.append(Level(x,self.bids[x].qty))
+                top_bids.append(Level(x, self.bids[x].qty))
             top_bids = top_bids[::-1]
             top_bids = tuple(top_bids)
         else:
             top_bids = []
             bids_keys = self.bids.keys()
-            for i in range(1,n+1):
-                top_bids.append(Level(bids_keys[-i],self.bids[bids_keys[-i]].qty))
+            for i in range(1, n + 1):
+                top_bids.append(Level(bids_keys[-i], self.bids[bids_keys[-i]].qty))
             top_bids = tuple(top_bids)
 
         # get bottom n bids
         if len(self.asks) <= n:
             top_asks = []
             for x in self.asks:
-                top_asks.append(Level(x,self.asks[x].qty))
+                top_asks.append(Level(x, self.asks[x].qty))
             top_asks = tuple(top_asks)
         else:
             top_asks = []
             asks_keys = self.asks.keys()
             for i in range(n):
-                top_asks.append(Level(asks_keys[i],self.asks[asks_keys[i]].qty))
+                top_asks.append(Level(asks_keys[i], self.asks[asks_keys[i]].qty))
             top_asks = tuple(top_asks)
 
-        return (top_bids,top_asks)
+        return (top_bids, top_asks)
 
     def view(
         self,
@@ -265,14 +263,14 @@ class OrderBook:
         bids, asks = self.depth_levels(n)
 
         return BookView(
-            symbol = self.symbol,
-            seq = self.seq,
-            recv_ns = recv_ns,
-            recv_wall_ns = recv_wall_ns,
-            exchange_ts_ns = exchange_ts_ns,
-            checksum_ok = checksum_ok,
-            bids = bids,
-            asks = asks
+            symbol=self.symbol,
+            seq=self.seq,
+            recv_ns=recv_ns,
+            recv_wall_ns=recv_wall_ns,
+            exchange_ts_ns=exchange_ts_ns,
+            checksum_ok=checksum_ok,
+            bids=bids,
+            asks=asks,
         )
 
     def quantity_to_price(self, side: Side, price: Decimal) -> Decimal:

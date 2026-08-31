@@ -28,8 +28,7 @@ __all__ = ["JsonFormatter", "configure_logging", "get_logger"]
 #: Attributes LogRecord always carries. Anything else came from ``extra=`` and
 #: is treated as structured context.
 _STANDARD_FIELDS = frozenset(
-    vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()
-    | {"asctime", "message", "taskName"}
+    vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys() | {"asctime", "message", "taskName"}
 )
 
 

@@ -76,9 +76,7 @@ async def test_rejected_subscription_is_not_retried() -> None:
         {"method": "subscribe", "req_id": 1, "success": False, "error": "Unsupported depth"}
     )
     socket = FakeWebSocket([rejection], on_exhaust="hang", ack=False)
-    client = KrakenFeedClient(
-        FeedConfig(max_reconnects=2), connect=sequenced_connect([socket])
-    )
+    client = KrakenFeedClient(FeedConfig(max_reconnects=2), connect=sequenced_connect([socket]))
 
     with pytest.raises(SubscriptionError, match="Unsupported depth"):
         await collect(client, 1)
@@ -232,14 +230,10 @@ def test_book_only_config_still_sends_one_request() -> None:
 
 async def test_both_subscriptions_are_acknowledged() -> None:
     socket = FakeWebSocket([STATUS_FRAME, SNAPSHOT_FRAME], on_exhaust="hang")
-    client = KrakenFeedClient(
-        FeedConfig(trades=True), connect=sequenced_connect([socket])
-    )
+    client = KrakenFeedClient(FeedConfig(trades=True), connect=sequenced_connect([socket]))
     messages = await collect(client, 4)
     acks = [
-        parse(m.payload)
-        for m in messages
-        if type(parse(m.payload)).__name__ == "SubscriptionAck"
+        parse(m.payload) for m in messages if type(parse(m.payload)).__name__ == "SubscriptionAck"
     ]
     assert {a.result["channel"] for a in acks} == {"book", "trade"}
     await client.aclose()

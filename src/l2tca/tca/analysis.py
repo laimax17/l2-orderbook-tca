@@ -121,8 +121,8 @@ def interval_vwap(
 
     view_ts = [v.recv_ns for v in views]
 
-    total_pv = Decimal('0')
-    total_volume = Decimal('0')
+    total_pv = Decimal("0")
+    total_volume = Decimal("0")
     valid_buckets = 0
 
     for ts_ns, vol in volumes:
@@ -135,19 +135,19 @@ def interval_vwap(
         target_view = views[idx]
         p_b = target_view.bids[0].price
         p_a = target_view.asks[0].price
-        p_mid = (p_b + p_a) / Decimal('2')
+        p_mid = (p_b + p_a) / Decimal("2")
 
         total_pv += p_mid * vol
         total_volume += vol
-        valid_buckets  += 1
+        valid_buckets += 1
 
     if valid_buckets == 0:
         raise ValueError("No valid bucket.")
 
-    if total_volume == Decimal('0'):
-        raise ValueError('Total volume is 0.')
+    if total_volume == Decimal("0"):
+        raise ValueError("Total volume is 0.")
 
-    return total_pv/total_volume
+    return total_pv / total_volume
 
 
 def simulate_child_orders(
@@ -194,7 +194,7 @@ def simulate_child_orders(
 
     fills: list[Fill] = []
     view_timestamps = [v.recv_ns for v in views]
-    is_buy = order.side == Side('bid')
+    is_buy = order.side == Side("bid")
 
     for t_ns in schedule_times:
         if remaining_total_qty <= Decimal("0"):
@@ -260,7 +260,7 @@ def attribute_slippage(
     if not views:
         raise ValueError("views sequence cannot be empty")
 
-    d = Decimal("1") if order.side == Side('bid') else Decimal("-1")
+    d = Decimal("1") if order.side == Side("bid") else Decimal("-1")
 
     Q_t = order.target_qty
 

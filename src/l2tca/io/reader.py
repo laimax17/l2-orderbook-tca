@@ -97,9 +97,7 @@ def validate_frame(frame: pl.DataFrame, table: str | TableSpec) -> None:
     for name, dtype in expected.items():
         actual = frame.schema[name]
         if actual != dtype:
-            raise ParquetValidationError(
-                f"{spec.name}.{name}: expected {dtype}, found {actual}"
-            )
+            raise ParquetValidationError(f"{spec.name}.{name}: expected {dtype}, found {actual}")
 
 
 def _polars_dtypes(spec: TableSpec) -> dict[str, pl.DataType]:

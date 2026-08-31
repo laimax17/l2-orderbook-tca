@@ -97,8 +97,7 @@ def render_histogram(hist: Histogram, *, width: int = 44) -> str:
 def format_report(report: BenchReport, *, histograms: bool = False) -> str:
     """Fixed-width table in microseconds, optionally with per-stage histograms."""
     header = (
-        f"{'stage':<26}{'n':>9}{'p50':>10}{'p90':>10}{'p99':>10}"
-        f"{'p99.9':>10}{'max':>10}{'err':>6}"
+        f"{'stage':<26}{'n':>9}{'p50':>10}{'p90':>10}{'p99':>10}{'p99.9':>10}{'max':>10}{'err':>6}"
     )
     lines = [
         f"source        : {report.source}",
@@ -128,6 +127,7 @@ def format_report(report: BenchReport, *, histograms: bool = False) -> str:
         for stage in report.stages:
             if stage.note or not stage.count:
                 continue
-            lines.extend(["", f"{stage.name} -- {stage.count} samples",
-                          render_histogram(stage.hist)])
+            lines.extend(
+                ["", f"{stage.name} -- {stage.count} samples", render_histogram(stage.hist)]
+            )
     return "\n".join(lines)

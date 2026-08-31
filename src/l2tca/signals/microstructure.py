@@ -62,7 +62,7 @@ def order_book_imbalance(view: BookView, levels: int = 1) -> float:
         if i < len(asks):
             qty_asks += float(asks[i].qty)
     if qty_bids == 0 and qty_asks == 0:
-        return float('nan')
+        return float("nan")
     return (qty_bids - qty_asks) / (qty_asks + qty_bids)
 
 
@@ -86,14 +86,13 @@ def micro_price(view: BookView) -> float:
     bids = view.bids
     asks = view.asks
     if not bids or not asks:
-        return float('nan')
+        return float("nan")
     bid_price = float(bids[0].price)
     ask_price = float(asks[0].price)
     bid_qty = float(bids[0].qty)
     ask_qty = float(asks[0].qty)
 
     return ((bid_price * ask_qty) + (ask_price * bid_qty)) / (bid_qty + ask_qty)
-
 
 
 def quoted_spread(view: BookView, *, in_bps: bool = True) -> float:
@@ -115,7 +114,7 @@ def quoted_spread(view: BookView, *, in_bps: bool = True) -> float:
     bids = view.bids
     asks = view.asks
     if not bids or not asks:
-        return float('nan')
+        return float("nan")
     bid_price = float(bids[0].price)
     ask_price = float(asks[0].price)
 
@@ -156,14 +155,14 @@ def effective_spread(
     :mod:`l2tca.tca.analysis`.
     """
     if not view.bids or not view.asks:
-        return float('nan')
+        return float("nan")
     p_b = float(view.bids[0].price)
     p_a = float(view.asks[0].price)
     p_mid = (p_a + p_b) / 2.0
 
     p_fill = float(fill_price)
 
-    d = 1.0 if side == Side('bid') else -1.0
+    d = 1.0 if side == Side("bid") else -1.0
 
     eff_spread = 2.0 * d * (p_fill - p_mid)
 

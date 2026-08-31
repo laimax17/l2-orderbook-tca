@@ -89,11 +89,12 @@ CHECKSUM_LEVELS = 10
 #   - live              book is trusted, updates applied directly
 #   - resyncing         book is known bad, a replacement snapshot is pending
 
+
 class State(StrEnum):
     DISCONNECTED = "disconnected"
-    AWAIT_SNAPSHOT = 'await_snapshot'
-    LIVE = 'live'
-    RESYNCING = 'resyncing'
+    AWAIT_SNAPSHOT = "await_snapshot"
+    LIVE = "live"
+    RESYNCING = "resyncing"
 
 
 class SequenceTracker:
@@ -155,8 +156,8 @@ class SequenceTracker:
         self.depth = depth
         self.price_precision = price_precision
         self.qty_precision = qty_precision
-        self.book = OrderBook(symbol,depth)
-        self.state = State('disconnected')
+        self.book = OrderBook(symbol, depth)
+        self.state = State("disconnected")
         self.seq_buffer = []
 
     def on_snapshot(self, snapshot: BookSnapshot) -> None:
@@ -168,7 +169,7 @@ class SequenceTracker:
           - What happens to anything buffered while it was in flight?
         """
         self.book.apply_snapshot(snapshot)
-        self.state = State('live')
+        self.state = State("live")
         self.seq_buffer = []
 
     def on_update(self, update: BookUpdate) -> bool:
@@ -183,7 +184,7 @@ class SequenceTracker:
           - What happens on the frame *after* the answer was ``False``?
         """
         # raise NotImplementedError("core logic: implement by hand")
-        if self.state != State('live'):
+        if self.state != State("live"):
             return False
 
         try:
@@ -196,25 +197,24 @@ class SequenceTracker:
         if update.checksum == 0:
             return False
         n = self.book.depth
-        bids,asks = self.book.depth_levels(n)
+        bids, asks = self.book.depth_levels(n)
         result = verify_checksum(
             bids=bids,
             asks=asks,
             expected=update.checksum,
             price_precision=self.price_precision,
-            qty_precision=self.qty_precision
+            qty_precision=self.qty_precision,
         )
         if result:
-            self.state = State('live')
+            self.state = State("live")
         else:
-            self.state = State('disconnected')
+            self.state = State("disconnected")
         return result
-
 
     def on_disconnect(self) -> None:
         """Handle the transport going away."""
         # raise NotImplementedError("core logic: implement by hand")
-        self.state = State('disconnected')
+        self.state = State("disconnected")
 
     def needs_resync(self) -> bool:
         """Whether a fresh snapshot should be requested now.
@@ -223,7 +223,7 @@ class SequenceTracker:
         that owns both? What does that imply about where this class sits?
         """
         # raise NotImplementedError("core logic: implement by hand")
-        return self.state == State('disconnected')
+        return self.state == State("disconnected")
 
     def buffer(self, update: BookUpdate) -> None:
         """Hold an update that arrived while a resync was in flight.
@@ -240,7 +240,7 @@ class SequenceTracker:
         this signature and its tests.
         """
         # raise NotImplementedError("core logic: implement by hand")
-        self.state = State('resyncing')
+        self.state = State("resyncing")
         self.seq_buffer.append(update)
 
     def drain(self) -> list[BookUpdate]:
