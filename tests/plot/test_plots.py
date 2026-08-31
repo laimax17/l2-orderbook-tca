@@ -108,9 +108,11 @@ def test_latency_plot_reads_a_json_file(capture: Path, tmp_path: Path) -> None:
 
 
 def test_latency_plot_is_explicit_when_the_book_is_unimplemented(capture: Path) -> None:
-    report = run_book_benchmark(capture, warmup=0)
+    from tests.bench.test_harness import UnimplementedBook
+
+    report = run_book_benchmark(capture, book_factory=UnimplementedBook, warmup=0)
     fig = plot_latency_histogram(report.to_dict())
-    # parse is the only stage with samples until the book exists.
+    # parse is the only stage with samples when the book stages are stubs.
     assert "parse" in fig.axes[0].get_title()
 
 
