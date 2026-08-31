@@ -30,12 +30,12 @@ layer -- see ``docs/CORE.md``.
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Sequence
 from decimal import Decimal
 
 from l2tca.book.types import BookView, Side
 from l2tca.tca.types import Fill, Order
-import bisect
 
 __all__ = [
     "arrival_price",
@@ -60,7 +60,7 @@ def arrival_price(order: Order, views: Sequence[BookView]) -> Decimal:
         ValueError: No view at or before ``order.decision_ns``, or that view has
             no mid. Reaching forward to the next view would be look-ahead.
     """
-    
+
     # instant: decision time
     # price: mid price
     # last frame recv_ns <= decision time
@@ -178,7 +178,7 @@ def simulate_child_orders(
 
     base_slice_qty = order.target_qty / Decimal(slices)
     remaining_total_qty = order.target_qty
-    carry_over_qty = Decimal("0") 
+    carry_over_qty = Decimal("0")
 
     fills: list[Fill] = []
     view_timestamps = [v.recv_ns for v in views]

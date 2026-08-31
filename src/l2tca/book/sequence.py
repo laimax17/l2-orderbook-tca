@@ -59,17 +59,15 @@ Questions the verification has to answer:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
-from l2tca.book.types import Level
-from l2tca.feed.messages import BookSnapshot, BookUpdate
-from enum import StrEnum
 import zlib
 from collections.abc import Iterable
 from decimal import Decimal
+from enum import StrEnum
 from itertools import islice
-from l2tca.book.order_book import OrderBook
 
+from l2tca.book.order_book import OrderBook
+from l2tca.book.types import Level
+from l2tca.feed.messages import BookSnapshot, BookUpdate
 
 __all__ = [
     "CHECKSUM_LEVELS",
@@ -187,11 +185,11 @@ class SequenceTracker:
         # raise NotImplementedError("core logic: implement by hand")
         if self.state != State('live'):
             return False
-        
+
         try:
             self.book.apply_update(update)
         except ValueError as e:
-            raise ValueError("apply update failed: ", e)
+            raise ValueError(f"apply update failed: {e}") from e
 
         if not update.checksum:
             return True
@@ -225,9 +223,7 @@ class SequenceTracker:
         that owns both? What does that imply about where this class sits?
         """
         # raise NotImplementedError("core logic: implement by hand")
-        if self.state == State('disconnected'):
-            return True
-        return False
+        return self.state == State('disconnected')
 
     def buffer(self, update: BookUpdate) -> None:
         """Hold an update that arrived while a resync was in flight.
@@ -306,7 +302,7 @@ def checksum_payload(
             and immediate signal.
         qty_precision: The pair's quantity decimals (``lot_decimals``).
     """
-    
+
     def side(levels: Iterable[Level]) -> str:
         return "".join(
             _render(level.price, price_precision) + _render(level.qty, qty_precision)

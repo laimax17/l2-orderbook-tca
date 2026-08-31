@@ -44,9 +44,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from sortedcontainers import SortedDict
+
 from l2tca.book.types import BookView, Level, Side
 from l2tca.feed.messages import BookSnapshot, BookUpdate
-from sortedcontainers import SortedDict
 
 __all__ = ["OrderBook"]
 
@@ -79,7 +80,7 @@ class OrderBook:
           - How does ``seq`` relate to snapshots versus updates?
         """
 
-        
+
         bids = SortedDict()
         asks = SortedDict()
 
@@ -100,7 +101,7 @@ class OrderBook:
         self.asks = asks
         self.seq += 1
 
- 
+
     def apply_update(self, update: BookUpdate) -> None:
         """Apply one incremental frame: adds, modifies and deletes, mixed.
 
@@ -119,7 +120,7 @@ class OrderBook:
           - After the frame is applied, is the book still bounded by ``depth``?
             What makes it so?
         """
-        
+
         undo: list[tuple[SortedDict, Decimal, Level | None]] = []
 
         try:
@@ -181,7 +182,7 @@ class OrderBook:
             return None
         price = self.bids.keys()[-1]
         return self.bids[price]
-    
+
     @property
     def best_ask(self) -> Level | None:
         """Lowest resting ask, or ``None`` on an empty side. Target: O(1)."""
@@ -189,7 +190,7 @@ class OrderBook:
             return None
         price = self.asks.keys()[0]
         return self.asks[price]
-    
+
     @property
     def mid(self) -> Decimal | None:
         """Mid price, or ``None`` when it is not defined.
@@ -206,7 +207,7 @@ class OrderBook:
         if self.bids and self.asks:
             return (self.best_ask.price - self.best_bid.price)
         return None
-    
+
     def depth_levels(self, n:int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
         """Top ``n`` levels per side, best first, as ``(bids, asks)``.
 
@@ -214,7 +215,7 @@ class OrderBook:
           - What comes back when a side holds fewer than ``n`` levels?
           - Callers keep these tuples. What does that require of what you return?
         """
-        
+
         # get top n bids
         if len(self.bids) <= n:
             top_bids = []
@@ -283,8 +284,8 @@ class OrderBook:
         """
 
         if side == Side.BID:
-            return sum(self.bids[p].qty for p in self.bids.keys() if p >= price)
+            return sum(self.bids[p].qty for p in self.bids if p >= price)
         elif side == Side.ASK:
-            return sum(self.asks[p].qty for p in self.asks.keys() if p <= price)
+            return sum(self.asks[p].qty for p in self.asks if p <= price)
         else:
             raise ValueError("Invalid Side value")

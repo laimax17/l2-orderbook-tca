@@ -93,7 +93,7 @@ def micro_price(view: BookView) -> float:
     ask_qty = float(asks[0].qty)
 
     return ((bid_price * ask_qty) + (ask_price * bid_qty)) / (bid_qty + ask_qty)
-    
+
 
 
 def quoted_spread(view: BookView, *, in_bps: bool = True) -> float:
@@ -160,7 +160,7 @@ def effective_spread(
     p_b = float(view.bids[0].price)
     p_a = float(view.asks[0].price)
     p_mid = (p_a + p_b) / 2.0
-    
+
     p_fill = float(fill_price)
 
     d = 1.0 if side == Side('bid') else -1.0
