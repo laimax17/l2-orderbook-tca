@@ -12,10 +12,13 @@ from l2tca.research.evaluate import (
     information_coefficient,
     signals_wide,
 )
+from l2tca.research.execution import execution_costs, summarise_costs
 
 __all__ = [
     "bucket_summary",
+    "execution_costs",
     "forward_return_bps",
     "information_coefficient",
     "signals_wide",
+    "summarise_costs",
 ]

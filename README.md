@@ -136,12 +136,22 @@ uv run l2tca replay data/raw/synthetic.jsonl --speed 10
 # 4. Flatten it into the partitioned tick table
 uv run l2tca convert data/raw/synthetic.jsonl --out data/parquet
 
-# 5. Time recv -> book-updated, per stage, with histograms
+# 5. Rebuild the book and derive the snapshot + signal tables
+uv run l2tca signals data/raw/synthetic.jsonl --out data/parquet
+
+# 6. Time recv -> book-updated, per stage, with histograms
 uv run l2tca bench data/raw/synthetic.jsonl --histogram
 
-# 6. Plot
+# 7. Plot
 uv run l2tca bench data/raw/synthetic.jsonl --json > bench.json
 uv run l2tca plot latency --report bench.json --out latency.png
+```
+
+On a capture recorded with `--trades`, the observed prints can then be priced
+against the book that stood at each one:
+
+```bash
+uv run l2tca costs --root data/parquet --horizons 1 5 30
 ```
 
 Capturing a live session:
@@ -205,6 +215,7 @@ What the core does:
 | `SequenceTracker` | Kraken sends no per-frame sequence number, so integrity rests on the CRC32 the exchange computes over the top ten levels of each side. The tracker recomputes it, and drives the disconnected → resyncing → live transitions, buffering updates while a replacement snapshot is in flight. |
 | `microstructure` | Order book imbalance, micro-price (with the crossed weighting — size on the far side pulls the price toward the near one), quoted spread, effective spread. |
 | `analysis` | Arrival benchmark at the decision instant, interval VWAP, a TWAP child-order simulator that walks the opposite side, and a four-layer shortfall attribution that sums to the total by construction. |
+| `research` | Whether the signals predict the next move (forward returns, quantile buckets, rank IC), and what real trades actually paid: effective spread against the contemporaneous mid, split into the part the resting side kept and the part the market took back. |
 
 ## Results
 

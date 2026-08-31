@@ -6,6 +6,7 @@
     l2tca replay   <file> --speed 10         replay it, paced or as fast as possible
     l2tca convert  <file> --out data/parquet flatten it into the tick table
     l2tca signals  <file> --out data/parquet replay it into the snapshot + signal tables
+    l2tca costs    --root data/parquet       realized execution cost on observed trades
     l2tca bench    <file>                    time recv -> book-updated, per stage
     l2tca plot     depth|spread|latency      render a figure to a PNG
 
@@ -23,7 +24,7 @@ import argparse
 from pathlib import Path
 
 from l2tca import __version__
-from l2tca.cli import bench, convert, inspect, plot, record, replay, signals, synth
+from l2tca.cli import bench, convert, costs, inspect, plot, record, replay, signals, synth
 from l2tca.config import VALID_DEPTHS
 from l2tca.io.derive import DEFAULT_IMBALANCE_LEVELS
 from l2tca.logging import configure_logging
@@ -37,6 +38,7 @@ _HANDLERS = {
     "replay": replay.run,
     "convert": convert.run,
     "signals": signals.run,
+    "costs": costs.run,
     "bench": bench.run,
     "plot": plot.run,
 }
@@ -125,6 +127,16 @@ def build_parser() -> argparse.ArgumentParser:
     sig.add_argument("--qty-precision", type=int, default=8)
     sig.add_argument("--limit", type=int, default=None, help="stop after N frames")
     sig.add_argument("--rows-per-file", type=int, default=500_000)
+
+    cst = sub.add_parser("costs", help="realized execution cost on observed trades")
+    cst.add_argument("--root", type=Path, default=None, help="parquet root (default: data/parquet)")
+    cst.add_argument(
+        "--horizons",
+        type=float,
+        nargs="*",
+        default=[1.0, 5.0, 30.0],
+        help="seconds to wait before re-reading the mid, for the realized/impact split",
+    )
 
     ben = sub.add_parser("bench", help="time recv -> book-updated against a capture")
     ben.add_argument("file", type=Path)
