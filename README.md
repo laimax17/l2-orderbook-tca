@@ -9,6 +9,10 @@ harness and plotting. On top of that, the part worth writing by hand: L2
 reconstruction, the checksum and resynchronisation state machine, microstructure
 signals, and four execution-cost measures. See [The core](#the-core).
 
+A frame goes from socket to updated book in **25 µs** at the median, 35 µs at
+the 99th, sustaining 32k updates/s on one core — measured, not estimated; see
+[Results](#results).
+
 Read-only against the exchange's public feed. There is no authenticated
 endpoint, no order entry, and no broker credential anywhere in the repository.
 
@@ -142,22 +146,47 @@ What the core does:
 
 ## Results
 
-The core is written and the harness runs against it end to end, so what is left
-here is arithmetic on a full capture rather than missing code. Filled in from a
-10-minute BTC/USD recording at depth 100:
+From one BTC/USD recording at depth 100: **598.9 s, 24,203 frames** (23,602
+updates, 1 snapshot, 40.4 frames/s), replayed with the first 500 frames dropped
+as warmup and snapshot rebuilds excluded.
+
+Machine: **Apple Silicon (arm64), macOS 26.4.1, CPython 3.14.7.** Latency
+numbers are meaningless without it, which is why every report carries its own
+environment block.
 
 | | |
 |---|---|
-| recv → book-updated, p50 / p99 / p99.9 | TBD |
-| `apply_update` p50 / p99 | TBD |
-| `view(10)` p50 / p99 | TBD |
-| Sustained throughput (updates/s) | TBD |
-| Checksum verification rate over a 10-minute capture | TBD |
-| Internal representation A/B (dict vs sorted vs tick array) | TBD |
-| Capture size, 10 minutes at depth 100 | TBD |
+| recv → book-updated, p50 / p99 / p99.9 | **24.96 / 35.50 / 75.33 µs** (max 175.29) |
+| `apply_update`, p50 / p99 | **4.38 / 8.79 µs** (max 65.58) |
+| `view(10)`, p50 / p99 | **13.75 / 16.63 µs** (max 98.63) |
+| `apply_snapshot`, 100 levels a side | **448.75 µs**, once per connection |
+| Sustained throughput | **32,155 updates/s** — 23,602 in 0.734 s of wall clock |
+| Checksum verification rate | **4852 / 4852 (100.00%)** over the committed 143 s sample |
+| Internal representation A/B (dict vs sorted vs tick array) | not measured — see below |
+| Capture size, 10 minutes at depth 100 | **7.8 MB** JSONL, ≈13.7 KB/s, ≈47 MB/hour; **10.4×** smaller gzipped |
 
-Measured with `l2tca bench <capture>`; every report carries the machine it ran
-on, because latency numbers without it are not comparable.
+Reproduce with `uv run l2tca bench <capture> --warmup 500 --histogram` and
+`uv run l2tca inspect <capture> --verify`. The checksum figure is over the
+sample committed to `tests/fixtures/`, so anyone who clones can rerun it; it is
+the opening 143 s of the same session.
+
+**Two things worth reading off that table.**
+
+`view(10)` costs **3.1×** what `apply_update` does — 13.75 µs against 4.38 µs.
+Taking the top ten levels out of the book is three times more expensive than
+maintaining it, which is not where the cost was expected to be, and it is the
+first thing to attack: the book is updated once per frame but read once per
+frame too, so it is more than half of the end-to-end path.
+
+Parsing costs **1.4×** an update — 6.29 µs against 4.38 µs. That is the price of
+`parse_float=Decimal`, paid so the wire digits survive exactly into the checksum.
+Floats would be faster and would silently break integrity checking, so the
+trade is deliberate; it is worth knowing it is the second-largest term.
+
+The representation A/B is the one row here that is not a measurement but a
+project: it means writing the book a second and third way (a plain dict sorted
+on read, a fixed tick array indexed by price level) and benchmarking all three.
+Left undone rather than guessed at.
 
 ## Design decisions
 
