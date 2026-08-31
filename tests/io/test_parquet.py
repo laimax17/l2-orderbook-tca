@@ -232,3 +232,26 @@ def test_a_book_only_capture_yields_no_trade_rows(tmp_path: Path) -> None:
     """Not an error: most captures in this project are recorded without --trades."""
     path = write_capture(tmp_path / "book.jsonl", raw_messages([SNAPSHOT_FRAME, UPDATE_FRAME]))
     assert list(iter_trade_rows(path)) == []
+
+
+def test_backfilled_trades_stay_distinguishable_in_parquet(tmp_path: Path) -> None:
+    """Provenance is not recoverable on read, so it has to survive the write."""
+    path = write_capture(
+        tmp_path / "backfill.jsonl",
+        raw_messages(
+            [
+                SNAPSHOT_FRAME,
+                trade_frame([("sell", "78914.8", "0.0000004")], snapshot=True),
+                trade_frame([("buy", "78883.2", "0.009")], first_trade_id=2),
+            ]
+        ),
+    )
+    root = tmp_path / "pq"
+    rows = list(iter_trade_rows(path))
+    with PartitionedParquetWriter(root, "trade", rows[0]["symbol"]) as writer:
+        writer.write_rows(iter(rows))
+
+    frame = read_table(root, "trade")
+    assert frame.get_column("frame_type").to_list() == ["snapshot", "update"]
+    live = frame.filter(pl.col("frame_type") == "update")
+    assert live.height == 1

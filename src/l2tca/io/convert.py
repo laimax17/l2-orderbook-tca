@@ -83,6 +83,10 @@ def trade_rows_from_frame(message: RawMessage, frame: Trades) -> list[dict[str, 
     share ``recv_ns`` and an exchange timestamp, which is enough to regroup them
     on read, and inventing a batch id would put a number in the data that the
     venue never sent.
+
+    ``frame_type`` is preserved, because that one is not recoverable on read: a
+    backfilled print is indistinguishable from a live one once its provenance is
+    dropped, and it is wrong to treat them alike.
     """
     base = {
         "schema_version": SCHEMA_VERSION,
@@ -90,6 +94,7 @@ def trade_rows_from_frame(message: RawMessage, frame: Trades) -> list[dict[str, 
         "seq": message.seq,
         "recv_ns": message.recv_ns,
         "recv_wall_ns": message.recv_wall_ns,
+        "frame_type": "snapshot" if frame.is_snapshot else "update",
     }
     return [
         {

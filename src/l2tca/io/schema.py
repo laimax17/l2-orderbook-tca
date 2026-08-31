@@ -129,6 +129,13 @@ def trade_schema() -> pa.Schema:
     ``side`` is the aggressor's, as the venue reports it. Storing it is the
     point of the table: trade sign is otherwise inferred from the prevailing
     quote, and that inference is wrong often enough to matter at the touch.
+
+    ``frame_type`` separates the backfill Kraken sends on subscribe from the
+    live stream, and it is not cosmetic. Backfilled prints executed before the
+    connection existed and all share one ``recv_ns``, so any rate or bucketed
+    average computed against arrival time counts them as simultaneous. Filter on
+    ``frame_type == 'update'``, or use ``exchange_ts_ns``, which is correct for
+    both.
     """
     return pa.schema(
         [
@@ -138,6 +145,7 @@ def trade_schema() -> pa.Schema:
             pa.field("recv_ns", pa.int64(), nullable=False),
             pa.field("recv_wall_ns", pa.int64(), nullable=False),
             pa.field("exchange_ts_ns", pa.int64(), nullable=True),
+            pa.field("frame_type", pa.string(), nullable=False),  # snapshot | update
             pa.field("trade_id", pa.int64(), nullable=True),
             pa.field("side", pa.string(), nullable=False),  # aggressor: buy | sell
             pa.field("price", pa.float64(), nullable=False),

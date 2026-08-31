@@ -142,6 +142,7 @@ def trade_frame(
     symbol: str = "BTC/USD",
     first_trade_id: int = 1,
     timestamp: str = "2026-08-30T02:24:31.123456Z",
+    snapshot: bool = False,
 ) -> str:
     """A ``trade`` frame carrying ``(side, price, qty)`` prints, as JSON text.
 
@@ -152,7 +153,7 @@ def trade_frame(
     return json.dumps(
         {
             "channel": "trade",
-            "type": "update",
+            "type": "snapshot" if snapshot else "update",
             "data": [
                 {
                     "symbol": symbol,

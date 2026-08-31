@@ -128,10 +128,21 @@ class Trades:
     they share an arrival stamp: splitting them would invent an ordering the
     feed never expressed, and losing the grouping would hide that they came
     from one taker.
+
+    Attributes:
+        is_snapshot: ``True`` for the backfill Kraken sends on subscribe, which
+            carries trades that executed *before* the connection existed. Their
+            ``recv_ns`` is the instant the backfill arrived, not the instant
+            they happened, so anything computed against arrival time -- a trade
+            rate, a VWAP bucketed by receipt -- must drop them or switch to
+            ``exchange_ts_ns``. On the probe capture this was fifty of the first
+            fifty-two prints, spanning the twenty-eight seconds before the
+            recorder started, all stamped with one arrival time.
     """
 
     symbol: str
     trades: tuple[Trade, ...]
+    is_snapshot: bool = False
 
 
 @dataclass(frozen=True, slots=True)

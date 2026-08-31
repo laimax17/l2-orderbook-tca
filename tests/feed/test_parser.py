@@ -195,3 +195,19 @@ def test_a_trade_frame_that_does_not_match_the_schema_is_an_error() -> None:
         trade_frame(entry(price="not-a-number")),
     ):
         assert isinstance(parse(bad), ErrorMessage), bad
+
+
+def test_the_subscribe_backfill_is_marked_as_such() -> None:
+    """Kraken replies to a trade subscription with prints that predate the socket.
+
+    On a live probe that was fifty of the first fifty-two, spanning the
+    twenty-eight seconds before the recorder started, all arriving at once.
+    Treating them as live makes any per-second rate wrong by a factor of fifty.
+    """
+    assert parse(trade_frame(entry())).is_snapshot is False
+    backfill = json.dumps(
+        {"channel": "trade", "type": "snapshot", "data": [entry(), entry(trade_id=92)]}
+    )
+    parsed = parse(backfill)
+    assert parsed.is_snapshot is True
+    assert len(parsed.trades) == 2
