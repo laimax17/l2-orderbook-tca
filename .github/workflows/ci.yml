@@ -25,11 +25,12 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
-      # The core suite fails on purpose until the hand-written core exists, so it
-      # is not a CI signal; excluded here explicitly rather than in pyproject, so
-      # that a bare `pytest` stays honest for whoever is writing the core.
-      - name: Test (infrastructure)
-        run: uv run pytest -m "not core" -q
+      # The whole suite, core included. The `core` marker stays in pyproject so
+      # a `-m core` run still isolates the hand-written modules while working on
+      # them, but it no longer splits CI: the core is written, so a failure
+      # there is a regression like any other.
+      - name: Test
+        run: uv run pytest -q
 
       - name: End-to-end smoke (no network)
         run: |
@@ -40,7 +41,3 @@ jobs:
           uv run l2tca bench data/raw/ci.jsonl --warmup 100 --histogram
           uv run l2tca bench data/raw/ci.jsonl --warmup 100 --json > bench.json
           uv run l2tca plot latency --report bench.json --out /tmp/latency.png
-
-      - name: Core suite status (informational, red until the core is written)
-        if: always()
-        run: uv run pytest -m core -q --no-header || true

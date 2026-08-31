@@ -1,23 +1,21 @@
-# The core: what is left to write, and what has to be decided first
+# The core: the decisions it rests on
 
-`book/`, `signals/` and `tca/` raise `NotImplementedError`. This file collects
-the open questions. It does not answer them — that is the point of the
-repository's shape.
+`book/`, `signals/` and `tca/` are written. This file is the record of what had
+to be decided before they could be, and which way each decision went — the
+questions the stubs asked, and the answers the implementations now encode.
 
-Order of work: **book → sequence → signals → TCA.** Signals and TCA both consume
-a `BookView`, so neither can be validated against real data until the book
-produces one.
+It was written before the code, in the order the code was built:
+**book → sequence → signals → TCA.** Signals and TCA both consume a `BookView`,
+so neither could be validated against real data until the book produced one.
 
 ```bash
-uv run pytest                                 # 118 pass, 74 fail
-uv run pytest -m core                         # the whole development target
+uv run pytest -m core                         # the 81 tests over these modules
 uv run pytest tests/test_order_book.py        # one file
-uv run pytest -m "not core"                   # the infrastructure alone: green
+uv run pytest -m "not core"                   # the 120 infrastructure tests
 ```
 
-The tests **do** contain answers — hard-coded expected values, as a red bar to
-code against. The docstrings ask; the tests pin. If you want to derive a
-decision yourself, read the stub first and the test afterwards.
+The tests carry hard-coded expected values, so a changed decision shows up as a
+specific number moving rather than as a vague failure.
 
 ---
 

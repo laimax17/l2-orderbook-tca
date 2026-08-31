@@ -5,9 +5,9 @@ Kraken's public WebSocket feed.
 
 Async ingest with reconnect and staleness detection, lossless capture to JSONL,
 deterministic replay, hour-partitioned Parquet storage, a latency benchmark
-harness and plotting — all complete and tested. The reconstruction, signal and
-TCA algorithms themselves are specified but **not implemented**; see
-[The core](#the-core-deliberately-unimplemented).
+harness and plotting. On top of that, the part worth writing by hand: L2
+reconstruction, the checksum and resynchronisation state machine, microstructure
+signals, and four execution-cost measures. See [The core](#the-core).
 
 Read-only against the exchange's public feed. There is no authenticated
 endpoint, no order entry, and no broker credential anywhere in the repository.
@@ -92,41 +92,49 @@ uv run l2tca record --duration 600 > summary.txt 2> events.jsonl
 | `bench/` | complete | recv → book-updated timing, percentiles, histograms |
 | `plot/` | complete | Depth ladder, spread series, latency histogram |
 | `cli/`, `logging.py`, `config.py` | complete | Commands, JSON logging, configuration |
-| `book/order_book.py` | **stub** | L2 reconstruction, depth trimming |
-| `book/sequence.py` | **stub** | Integrity and resynchronisation state machine |
-| `signals/microstructure.py` | **stub** | Imbalance, micro-price, quoted and effective spread |
-| `tca/analysis.py` | **stub** | Arrival benchmark, interval VWAP, child orders, attribution |
+| `book/order_book.py` | complete | L2 reconstruction, transactional updates, depth trimming |
+| `book/sequence.py` | complete | CRC32 integrity and resynchronisation state machine |
+| `signals/microstructure.py` | complete | Imbalance, micro-price, quoted and effective spread |
+| `tca/analysis.py` | complete | Arrival benchmark, interval VWAP, child orders, attribution |
 
-## The core, deliberately unimplemented
+## The core
 
-`book/`, `signals/` and `tca/` raise `NotImplementedError`. This is the shape of
-the repository on purpose: the algorithms are the part worth writing by hand,
-and everything around them is finished so the first line of the book can be run
-against a real recording and benchmarked the same minute.
+`book/`, `signals/` and `tca/` are the algorithms — everything else in the
+repository exists so that they can be run against a real recording and
+benchmarked the same minute they are written.
 
-The stubs state the input format, the complexity targets, and the questions each
-piece has to answer — not the answers. [`docs/CORE.md`](docs/CORE.md) collects
-the open design questions.
-
-**The tests are the answer key.** They assert hard-coded expected values, and
-they are red:
+The repository was built stubs-first for exactly that reason: the surrounding
+infrastructure was finished, and the four core modules shipped as signatures,
+complexity targets and a red test suite before a line of their bodies existed.
+[`docs/CORE.md`](docs/CORE.md) records the design decisions each one rests on
+and why they went the way they did.
 
 ```bash
-uv run pytest                  # 118 pass, 74 fail -- the 74 are the work
-uv run pytest -m core          # the core suite alone
-uv run pytest -m "not core"    # the infrastructure alone: green. What CI runs.
+uv run pytest                  # everything
+uv run pytest -m core          # the 81 tests over the hand-written modules
+uv run pytest -m "not core"    # the 120 infrastructure tests
 ```
 
-A bare `pytest` is red on purpose, and there is deliberately no marker filter in
-`addopts`: a filter there applies to every invocation, including the explicit
-node ids an IDE passes when you click a single test, which silently deselects it
-instead of running it. Implement a method, rerun, and the tests tell you whether
-you got it right.
+The `core` marker survives because it is still the useful cut while working on
+one of those modules. There is deliberately no marker filter in `addopts`: a
+filter there applies to every invocation, including the explicit node ids an IDE
+passes when you click a single test, which silently deselects it instead of
+running it.
+
+What the core does:
+
+| | |
+|---|---|
+| `OrderBook` | Two `SortedDict` sides. `apply_update` is transactional — an undo log rolls the frame back whole if it would leave the book crossed, so a rejected frame never leaves a half-applied state. |
+| `SequenceTracker` | Kraken sends no per-frame sequence number, so integrity rests on the CRC32 the exchange computes over the top ten levels of each side. The tracker recomputes it, and drives the disconnected → resyncing → live transitions, buffering updates while a replacement snapshot is in flight. |
+| `microstructure` | Order book imbalance, micro-price (with the crossed weighting — size on the far side pulls the price toward the near one), quoted spread, effective spread. |
+| `analysis` | Arrival benchmark at the decision instant, interval VWAP, a TWAP child-order simulator that walks the opposite side, and a four-layer shortfall attribution that sums to the total by construction. |
 
 ## Results
 
-Nothing measured yet — the book is unimplemented, so there is no update path to
-time and no reconstructed depth to plot. Filled in once the core exists:
+The core is written and the harness runs against it end to end, so what is left
+here is arithmetic on a full capture rather than missing code. Filled in from a
+10-minute BTC/USD recording at depth 100:
 
 | | |
 |---|---|
@@ -209,9 +217,9 @@ is absent. Record one and commit a trimmed slice to activate them.
 ```
 src/l2tca/
   feed/      WS client, reconnect, parsing, JSONL capture, replay
-  book/      order book core + resync state machine   [stub]
-  signals/   microstructure factors                   [stub]
-  tca/       execution cost analysis                  [stub]
+  book/      order book core + resync state machine   [core]
+  signals/   microstructure factors                   [core]
+  tca/       execution cost analysis                  [core]
   io/        Arrow schemas, Parquet writer/reader
   bench/     latency harness
   plot/      figures over stored Parquet
@@ -220,7 +228,7 @@ tests/
   factories.py   test data factory
   fixtures/      a recorded sample goes here
   test_order_book.py test_sequence.py
-  test_microstructure.py test_analysis.py   ← the core suite, red by design
+  test_microstructure.py test_analysis.py   ← the core suite (`-m core`)
 data/raw/    captures (gitignored)
 notebooks/
 docs/CORE.md
