@@ -31,7 +31,74 @@ endpoint, no order entry, and no broker credential anywhere in the repository.
 
 ## Architecture
 
-<!-- TODO: architecture diagram goes here. -->
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 460, "nodeSpacing": 45, "rankSpacing": 45, "curve": "basis"}}}%%
+flowchart TB
+    KRAKEN(["<b>Kraken WebSocket v2</b> — book · depth=100 · CRC32 on every frame"])
+
+    CLIENT["<b>feed/client.py</b><br/>subscribe · heartbeat · full-jitter reconnect · staleness watchdog<br/>stamps every frame: recv_ns = perf_counter_ns(), recv_wall_ns = time_ns()"]
+
+    CAP["<b>feed/recorder.py → data/raw/*.jsonl.gz → feed/replay.py</b><br/>lossless capture, payloads never re-serialised<br/>replayed at the original inter-arrival gaps"]
+
+    SRC(["<b>feed/source.py — MessageSource</b><br/>live and replay both satisfy it, so nothing below this line can tell them apart"])
+
+    PARSE["<b>feed/parser.py</b> — parse_float=Decimal, so the wire digits reach the checksum unrounded"]
+
+    SEQ["<b>book/sequence.py</b><br/>four states: disconnected · awaiting_snapshot · live · resyncing<br/>which conditions move it, and where to, are yours (§2)"]
+
+    OB["<b>book/order_book.py</b><br/>incremental reconstruction — representation, key type and<br/>what a rejected frame leaves behind are all yours (§1)"]
+
+    VIEW(["<b>BookView</b> — immutable, best-first"])
+
+    SIG["<b>signals/</b><br/>imbalance<br/>micro-price<br/>quoted and effective spread"]
+    TCA["<b>tca/</b><br/>arrival_price<br/>interval_vwap<br/>simulate_child_orders<br/>attribute_slippage<br/>(§4 — all four are yours)"]
+    STORE["<b>io/</b><br/>pinned Arrow schemas<br/>hive symbol= / date= / hour="]
+    BENCH["<b>bench/</b> — wraps parse → apply_update → view(10)<br/>recv → book-updated, p50/p90/p99/p99.9 + histogram<br/>warmup and snapshot rebuilds excluded"]
+
+    PQ[("<b>data/parquet/</b> — tick · snapshot · signal")]
+    PLOT["<b>plot/</b> — depth ladder · spread series · latency histogram"]
+
+    KRAKEN --> CLIENT
+    CLIENT -->|live| SRC
+    CLIENT --> CAP -->|offline| SRC
+    SRC --> PARSE --> SEQ -->|apply| OB
+    OB -->|"checksum agrees"| VIEW
+    OB -.->|"checksum fails — what recovery, and after how many? (§2)"| CLIENT
+    VIEW --> SIG
+    VIEW --> TCA
+    VIEW --> STORE
+    VIEW -.-> BENCH
+    SIG --> STORE
+    STORE --> PQ --> PLOT
+    BENCH --> PLOT
+
+    classDef yours stroke-dasharray: 6 4, stroke-width: 2px
+    class SEQ,OB,SIG,TCA yours
+```
+
+**Dashed boxes are yours to write.** Everything with a solid border is finished
+and tested; the four dashed ones are signatures, docstrings and a red suite, and
+the section numbers point at the open questions in
+[`docs/CORE.md`](docs/CORE.md).
+
+Two things in that picture are the whole design, and both are why the exercise
+is workable at all.
+
+**Live and replay converge above the book.** `client.py` feeds the recorder and
+the parser from the same stamped frames, and `replay.py` re-enters through the
+same `MessageSource`. Nothing below that line can tell which one it is running
+against — so you can develop the book against a recorded file, deterministically,
+without a socket and without the market being open. Replay at `speed=0` with the
+recorded timestamps kept makes a run a pure function of the capture.
+
+**The exchange will check your reconstruction for you.** Kraken sends no
+per-frame sequence number; what it sends is a CRC32 over the top ten levels of
+each side, recomputed on every frame. Once your book applies updates correctly,
+that checksum agrees on every frame of a capture — and until it does, it tells
+you exactly which frame you got wrong. It is a far harder test than anything in
+`tests/`, and `tests/fixtures/sample.jsonl.gz` has 4852 frames of it waiting.
+What the tracker should *do* about a mismatch is a different question, and that
+one is section 2.
 
 ## Scope
 
