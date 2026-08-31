@@ -63,9 +63,21 @@ def arrival_price(order: Order, views: Sequence[BookView]) -> Decimal:
     # instant: decision time
     # price: mid price
     # last frame recv_ns <= decision time
+    if not views:
+        raise ValueError("Empty view.")
     t = order.decision_ns
-    
-
+    valid_views = [v for v in views if v.recv_ns <= t]
+    print('==============================================================================================================')
+    print(t)
+    # print(valid_views)
+    if not valid_views:
+        raise ValueError("No valid view.")
+    target_view = valid_views[-1]
+    print(target_view)
+    print('==============================================================================================================')
+    p_b = target_view.bids[0].price
+    p_a = target_view.asks[0].price
+    return (p_a + p_b) / Decimal("2")
 
 
 def interval_vwap(
