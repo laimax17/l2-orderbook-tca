@@ -7,6 +7,7 @@
     l2tca convert  <file> --out data/parquet flatten it into the tick table
     l2tca signals  <file> --out data/parquet replay it into the snapshot + signal tables
     l2tca costs    --root data/parquet       realized execution cost on observed trades
+    l2tca simulate <file> --qty 5            replay a TWAP execution, priced vs benchmarks
     l2tca bench    <file>                    time recv -> book-updated, per stage
     l2tca plot     depth|spread|latency      render a figure to a PNG
 
@@ -24,7 +25,18 @@ import argparse
 from pathlib import Path
 
 from l2tca import __version__
-from l2tca.cli import bench, convert, costs, inspect, plot, record, replay, signals, synth
+from l2tca.cli import (
+    bench,
+    convert,
+    costs,
+    inspect,
+    plot,
+    record,
+    replay,
+    signals,
+    simulate,
+    synth,
+)
 from l2tca.config import VALID_DEPTHS
 from l2tca.io.derive import DEFAULT_IMBALANCE_LEVELS
 from l2tca.logging import configure_logging
@@ -39,6 +51,7 @@ _HANDLERS = {
     "convert": convert.run,
     "signals": signals.run,
     "costs": costs.run,
+    "simulate": simulate.run,
     "bench": bench.run,
     "plot": plot.run,
 }
@@ -136,6 +149,19 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         default=[1.0, 5.0, 30.0],
         help="seconds to wait before re-reading the mid, for the realized/impact split",
+    )
+
+    sim = sub.add_parser("simulate", help="replay a TWAP execution across windows of a capture")
+    sim.add_argument("file", type=Path)
+    sim.add_argument("--symbol", default="BTC/USD")
+    sim.add_argument("--depth", type=int, default=100, choices=VALID_DEPTHS)
+    sim.add_argument("--side", default="buy", choices=["buy", "sell"])
+    sim.add_argument("--qty", type=float, default=1.0, help="parent order quantity")
+    sim.add_argument("--duration", type=float, default=60.0, help="window length, seconds")
+    sim.add_argument("--slices", type=int, default=10, help="children per parent")
+    sim.add_argument("--windows", type=int, default=20, help="windows spread across the capture")
+    sim.add_argument(
+        "--per-window", action="store_true", help="print every window, not just the summary"
     )
 
     ben = sub.add_parser("bench", help="time recv -> book-updated against a capture")

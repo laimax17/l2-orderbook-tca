@@ -218,7 +218,7 @@ What the core does:
 | `SequenceTracker` | Kraken sends no per-frame sequence number, so integrity rests on the CRC32 the exchange computes over the top ten levels of each side. The tracker recomputes it, and drives the disconnected → resyncing → live transitions, buffering updates while a replacement snapshot is in flight. |
 | `microstructure` | Order book imbalance, micro-price (with the crossed weighting — size on the far side pulls the price toward the near one), quoted spread, effective spread. |
 | `analysis` | Arrival benchmark at the decision instant, interval VWAP, a TWAP child-order simulator that walks the opposite side, and a four-layer shortfall attribution that sums to the total by construction. |
-| `research` | Whether the signals predict the next move (forward returns, quantile buckets, rank IC), and what real trades actually paid: effective spread against the contemporaneous mid, split into the part the resting side kept and the part the market took back. |
+| `research` | Whether the signals predict the next move (forward returns, quantile buckets, rank IC); what real trades actually paid, split into the part the resting side kept and the part the market took back; and an execution backtest that works a TWAP across many windows of a capture and prices it against arrival and interval VWAP. |
 
 ## Results
 
@@ -323,10 +323,27 @@ uv run l2tca inspect <capture> --verify
 uv run l2tca convert <capture> --out data/parquet
 uv run l2tca signals <capture> --out data/parquet
 uv run l2tca costs   --root data/parquet --horizons 1 5 30
+uv run l2tca simulate <capture> --qty 5 --duration 60 --windows 20
 ```
 
 Without a capture of your own, `tests/fixtures/sample.jsonl.gz` runs the first
 three on the opening 143 s of the same session (4,852 / 4,852 checksums).
+
+### What is not backtested
+
+There is no strategy backtest here, and that is a decision rather than a gap.
+`l2tca simulate` is an *execution* backtest: it works a TWAP across windows of a
+capture and prices the result against arrival and interval VWAP, claiming
+nothing about whether trading was a good idea. That is defensible on hours of
+data precisely because no alpha is being estimated.
+
+A profit-and-loss backtest would not be. Two of the reasons are structural
+rather than a matter of effort. Hours of one symbol cannot support a P&L
+estimate — the information coefficients measured here change sign between
+horizons. And L2 data carries no queue position, so a resting order's fill
+cannot be simulated at all, which leaves only aggressive execution — paying a
+spread that this capture shows to be one tick at the median with a negative
+realized component. That is a structural cost, not a strategy.
 
 ### Not measured
 
