@@ -44,10 +44,16 @@ __all__ = [
 ]
 
 #: Bumped on any incompatible change to any table below. Written into every row.
-#: Adding a table is not one: a reader that does not know `trade` simply never
+#:
+#: Adding a *table* is not one: a reader that does not know `trade` simply never
 #: asks for it, while a reader that does can tell an empty table from an absent
 #: one by whether the directory exists.
-SCHEMA_VERSION = 1
+#:
+#: Adding a *column to an existing table* is. Version 2 added `frame_type` to
+#: the trade table, and the omission of this bump is what let a v1 file and a v2
+#: file end up in one partition directory, where a scan reads the schema of
+#: whichever it opens first and then rejects the other.
+SCHEMA_VERSION = 2
 
 
 def tick_schema() -> pa.Schema:

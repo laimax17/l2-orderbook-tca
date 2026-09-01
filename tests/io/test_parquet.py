@@ -5,14 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import polars as pl
+import pyarrow as pa
 import pytest
 from tests.conftest import SNAPSHOT_FRAME, UPDATE_FRAME
-from tests.factories import raw_messages, trade_frame, write_capture
+from tests.factories import raw_messages, synthetic_capture, trade_frame, write_capture
 
 from l2tca.io.convert import iter_tick_rows, iter_trade_rows
 from l2tca.io.reader import ParquetValidationError, read_table, scan_table, validate_frame
-from l2tca.io.schema import SCHEMA_VERSION, TABLES, partition_of
-from l2tca.io.writer import PartitionedParquetWriter
+from l2tca.io.schema import SCHEMA_VERSION, TABLES, TableSpec, partition_of
+from l2tca.io.writer import PartitionedParquetWriter, SchemaDriftError
 
 HOUR_NS = 3_600 * 1_000_000_000
 BASE_NS = 1_767_346_200_000_000_000  # 2026-01-02T09:30:00Z
@@ -267,3 +268,51 @@ def test_backfilled_trades_stay_distinguishable_in_parquet(tmp_path: Path) -> No
     assert frame.get_column("frame_type").to_list() == ["snapshot", "update"]
     live = frame.filter(pl.col("frame_type") == "update")
     assert live.height == 1
+
+
+# -- appending across a schema change --------------------------------------
+
+
+def test_appending_under_a_changed_schema_is_refused(tmp_path: Path) -> None:
+    """The failure this reproduces was found by running the tool, not by a test.
+
+    A column was added to the trade table without bumping SCHEMA_VERSION, so a
+    rerun appended a wider file beside a narrower one. Nothing complained until
+    a scan opened the directory weeks later and rejected the *second* file for
+    having "an extra column" -- a message about a file, when the cause was the
+    rerun.
+    """
+    spec = TABLES["trade"]
+    narrower = pa.schema([f for f in spec.schema if f.name != "frame_type"])
+    row = {
+        "schema_version": SCHEMA_VERSION,
+        "symbol": "BTC-USD",
+        "seq": 1,
+        "recv_ns": 1,
+        "recv_wall_ns": 1_700_000_000_000_000_000,
+        "exchange_ts_ns": None,
+        "frame_type": "update",
+        "trade_id": 1,
+        "side": "buy",
+        "price": 100.0,
+        "qty": 1.0,
+        "ord_type": "market",
+    }
+
+    old_spec = TableSpec("trade", narrower)
+    with PartitionedParquetWriter(tmp_path, old_spec, "BTC-USD") as writer:
+        writer.write_row({k: v for k, v in row.items() if k != "frame_type"})
+
+    with pytest.raises(SchemaDriftError, match="frame_type"), PartitionedParquetWriter(
+        tmp_path, "trade", "BTC-USD"
+    ) as writer:
+        writer.write_row(row)
+
+
+def test_appending_under_the_same_schema_still_works(tmp_path: Path) -> None:
+    """The guard must not break the rerun-appends-a-part behaviour it protects."""
+    rows = list(iter_tick_rows(synthetic_capture(tmp_path / "c.jsonl", updates=40)))
+    for _ in range(2):
+        with PartitionedParquetWriter(tmp_path / "pq", "tick", rows[0]["symbol"]) as writer:
+            writer.write_rows(iter(rows))
+    assert read_table(tmp_path / "pq", "tick").height == 2 * len(rows)

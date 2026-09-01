@@ -22,7 +22,11 @@ import pyarrow.parquet as pq
 
 from l2tca.io.schema import SCHEMA_VERSION, TABLES, TableSpec, partition_of
 
-__all__ = ["PartitionedParquetWriter"]
+__all__ = ["PartitionedParquetWriter", "SchemaDriftError"]
+
+
+class SchemaDriftError(RuntimeError):
+    """Existing files in a partition were written under a different schema."""
 
 
 class PartitionedParquetWriter:
@@ -61,6 +65,7 @@ class PartitionedParquetWriter:
         self.files_written = 0
         self._buffers: dict[tuple[tuple[str, str], ...], list[dict[str, Any]]] = defaultdict(list)
         self._part_index: dict[tuple[tuple[str, str], ...], int] = defaultdict(int)
+        self._checked: set[tuple[tuple[str, str], ...]] = set()
         self._closed = False
 
     # -- api ---------------------------------------------------------------
@@ -115,12 +120,49 @@ class PartitionedParquetWriter:
             path = path / f"{name}={value}"
         return path
 
+    def _check_existing(self, directory: Path, key: tuple[tuple[str, str], ...]) -> None:
+        """Refuse to append into a partition written under a different schema.
+
+        Appending is the right default -- a rerun should not clobber an earlier
+        capture -- but it is only safe while the columns are unchanged. Add one
+        and the directory holds two shapes; a scan reads the schema of whichever
+        file it opens first and rejects the other, at read time, in a message
+        about a file rather than about the rerun that caused it.
+
+        Checked once per partition, on its first flush, against one existing
+        file: every file in a directory was written by this class, so they agree
+        with each other or the run that mixed them already failed here.
+        """
+        if key in self._checked:
+            return
+        self._checked.add(key)
+        existing = sorted(directory.glob("*.parquet"))
+        if not existing:
+            return
+
+        found = set(pq.read_schema(existing[0]).names)
+        expected = set(self.spec.schema.names)
+        if found == expected:
+            return
+        missing = sorted(expected - found)
+        extra = sorted(found - expected)
+        raise SchemaDriftError(
+            f"{existing[0]} was written under a different schema for the "
+            f"{self.spec.name!r} table"
+            + (f"; it lacks {missing}" if missing else "")
+            + (f"; it has unexpected {extra}" if extra else "")
+            + f". Appending would leave two shapes in one partition, which fails "
+            f"at read time. Remove {self.root / self.spec.name} and write it again."
+        )
+
     def _flush_partition(self, key: tuple[tuple[str, str], ...]) -> None:
         rows = self._buffers.get(key)
         if not rows:
             return
         directory = self._partition_dir(key)
         directory.mkdir(parents=True, exist_ok=True)
+
+        self._check_existing(directory, key)
 
         index = self._part_index[key]
         # Never overwrite: a rerun against the same root appends new parts rather
