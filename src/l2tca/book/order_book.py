@@ -208,42 +208,33 @@ class OrderBook:
             return (self.best_ask.price - self.best_bid.price)
         return None
 
-    def depth_levels(self, n:int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
+    def depth_levels(self, n: int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
         """Top ``n`` levels per side, best first, as ``(bids, asks)``.
 
-        Questions:
-          - What comes back when a side holds fewer than ``n`` levels?
-          - Callers keep these tuples. What does that require of what you return?
+        Read straight off the values view. The stored values *are* the
+        :class:`Level` objects this returns, so rebuilding one per level costs
+        an allocation and -- the expensive half -- a second lookup keyed by a
+        ``Decimal``, whose hash is far dearer than an integer's. Slicing the
+        view walks the index once instead.
+
+        Both sides are stored ascending by price, so the best of each sits at
+        opposite ends: bids are taken from the tail and reversed, asks from the
+        head. Taking both from the same end returns the *worst* levels, and the
+        checksum catches it on the first frame, because it is computed over
+        exactly these ten.
+
+        A side holding fewer levels than asked for returns what it has, in
+        order. The tuples are safe to keep: :class:`Level` is immutable and the
+        slice copies the view, so a later update -- which rebinds the price to a
+        new ``Level`` rather than mutating the old one -- cannot reach into a
+        result already handed out.
         """
-
-        # get top n bids
-        if len(self.bids) <= n:
-            top_bids = []
-            for x in self.bids:
-                top_bids.append(Level(x,self.bids[x].qty))
-            top_bids = top_bids[::-1]
-            top_bids = tuple(top_bids)
-        else:
-            top_bids = []
-            bids_keys = self.bids.keys()
-            for i in range(1,n+1):
-                top_bids.append(Level(bids_keys[-i],self.bids[bids_keys[-i]].qty))
-            top_bids = tuple(top_bids)
-
-        # get bottom n bids
-        if len(self.asks) <= n:
-            top_asks = []
-            for x in self.asks:
-                top_asks.append(Level(x,self.asks[x].qty))
-            top_asks = tuple(top_asks)
-        else:
-            top_asks = []
-            asks_keys = self.asks.keys()
-            for i in range(n):
-                top_asks.append(Level(asks_keys[i],self.asks[asks_keys[i]].qty))
-            top_asks = tuple(top_asks)
-
-        return (top_bids,top_asks)
+        if n <= 0:
+            # `values()[-0:]` is the whole side, not nothing.
+            return ((), ())
+        bids = self.bids.values()
+        asks = self.asks.values()
+        return tuple(reversed(bids[-n:])), tuple(asks[:n])
 
     def view(
         self,
