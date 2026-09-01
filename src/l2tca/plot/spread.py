@@ -24,9 +24,7 @@ def spread_frame(root: Path | str, *, symbol_token: str | None = None) -> pl.Dat
     """
     frame = read_table(root, "snapshot", symbol_token=symbol_token)
     return (
-        frame.filter(
-            (pl.col("bid_px").list.len() > 0) & (pl.col("ask_px").list.len() > 0)
-        )
+        frame.filter((pl.col("bid_px").list.len() > 0) & (pl.col("ask_px").list.len() > 0))
         .with_columns(
             best_bid=pl.col("bid_px").list.first(),
             best_ask=pl.col("ask_px").list.first(),

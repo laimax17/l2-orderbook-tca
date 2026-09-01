@@ -80,7 +80,6 @@ class OrderBook:
           - How does ``seq`` relate to snapshots versus updates?
         """
 
-
         bids = SortedDict()
         asks = SortedDict()
 
@@ -100,7 +99,6 @@ class OrderBook:
         self.bids = bids
         self.asks = asks
         self.seq += 1
-
 
     def apply_update(self, update: BookUpdate) -> None:
         """Apply one incremental frame: adds, modifies and deletes, mixed.
@@ -205,7 +203,7 @@ class OrderBook:
     def spread(self) -> Decimal | None:
         """Quoted spread, or ``None`` when it is not defined."""
         if self.bids and self.asks:
-            return (self.best_ask.price - self.best_bid.price)
+            return self.best_ask.price - self.best_bid.price
         return None
 
     def depth_levels(self, n: int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
@@ -256,14 +254,14 @@ class OrderBook:
         bids, asks = self.depth_levels(n)
 
         return BookView(
-            symbol = self.symbol,
-            seq = self.seq,
-            recv_ns = recv_ns,
-            recv_wall_ns = recv_wall_ns,
-            exchange_ts_ns = exchange_ts_ns,
-            checksum_ok = checksum_ok,
-            bids = bids,
-            asks = asks
+            symbol=self.symbol,
+            seq=self.seq,
+            recv_ns=recv_ns,
+            recv_wall_ns=recv_wall_ns,
+            exchange_ts_ns=exchange_ts_ns,
+            checksum_ok=checksum_ok,
+            bids=bids,
+            asks=asks,
         )
 
     def quantity_to_price(self, side: Side, price: Decimal) -> Decimal:

@@ -33,7 +33,7 @@ git clone -b template https://github.com/laimax17/l2-orderbook-tca
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 460, "nodeSpacing": 45, "rankSpacing": 45, "curve": "basis"}}}%%
 flowchart TB
-    KRAKEN(["<b>Kraken WebSocket v2</b> — book · depth=100 · CRC32 on every frame"])
+    KRAKEN(["<b>Kraken WebSocket v2</b><br/>book · depth=100 · CRC32 on every frame<br/>trade · executed prints with the aggressor's side"])
 
     CLIENT["<b>feed/client.py</b><br/>subscribe · heartbeat · full-jitter reconnect · staleness watchdog<br/>stamps every frame: recv_ns = perf_counter_ns(), recv_wall_ns = time_ns()"]
 
@@ -42,6 +42,8 @@ flowchart TB
     SRC(["<b>feed/source.py — MessageSource</b><br/>live and replay both satisfy it, so nothing below this line can tell them apart"])
 
     PARSE["<b>feed/parser.py</b> — parse_float=Decimal, so the wire digits reach the checksum unrounded"]
+
+    TRADES(["<b>Trades</b> — executed prints, aggressor side"])
 
     SEQ["<b>book/sequence.py</b><br/>disconnected → resyncing → live · buffers updates while a snapshot is in flight"]
 
@@ -54,13 +56,16 @@ flowchart TB
     STORE["<b>io/</b><br/>pinned Arrow schemas<br/>hive symbol= / date= / hour="]
     BENCH["<b>bench/</b> — wraps parse → apply_update → view(10)<br/>recv → book-updated, p50/p90/p99/p99.9 + histogram<br/>warmup and snapshot rebuilds excluded"]
 
-    PQ[("<b>data/parquet/</b> — tick · snapshot · signal")]
+    PQ[("<b>data/parquet/</b> — tick · snapshot · signal · trade")]
     PLOT["<b>plot/</b> — depth ladder · spread series · latency histogram"]
 
     KRAKEN --> CLIENT
     CLIENT -->|live| SRC
     CLIENT --> CAP -->|offline| SRC
     SRC --> PARSE --> SEQ -->|apply| OB
+    PARSE -->|trade frames| TRADES
+    TRADES --> TCA
+    TRADES --> STORE
     OB -->|"CRC32 agrees"| VIEW
     OB -->|"drift — resubscribe for a fresh snapshot"| CLIENT
     VIEW --> SIG
@@ -96,7 +101,7 @@ Phase one, and nothing beyond it:
 | | |
 |---|---|
 | Exchange | Kraken public WebSocket v2 |
-| Channel | `book`, `depth=100` |
+| Channels | `book` (`depth=100`), and `trade` with `--trades` |
 | Symbol | `BTC/USD` (configurable; `XBT/USD` is accepted and normalised) |
 | Storage | JSONL captures, Parquet tables |
 
@@ -131,12 +136,22 @@ uv run l2tca replay data/raw/synthetic.jsonl --speed 10
 # 4. Flatten it into the partitioned tick table
 uv run l2tca convert data/raw/synthetic.jsonl --out data/parquet
 
-# 5. Time recv -> book-updated, per stage, with histograms
+# 5. Rebuild the book and derive the snapshot + signal tables
+uv run l2tca signals data/raw/synthetic.jsonl --out data/parquet
+
+# 6. Time recv -> book-updated, per stage, with histograms
 uv run l2tca bench data/raw/synthetic.jsonl --histogram
 
-# 6. Plot
+# 7. Plot
 uv run l2tca bench data/raw/synthetic.jsonl --json > bench.json
 uv run l2tca plot latency --report bench.json --out latency.png
+```
+
+On a capture recorded with `--trades`, the observed prints can then be priced
+against the book that stood at each one:
+
+```bash
+uv run l2tca costs --root data/parquet --horizons 1 5 30
 ```
 
 Capturing a live session:
@@ -200,6 +215,7 @@ What the core does:
 | `SequenceTracker` | Kraken sends no per-frame sequence number, so integrity rests on the CRC32 the exchange computes over the top ten levels of each side. The tracker recomputes it, and drives the disconnected → resyncing → live transitions, buffering updates while a replacement snapshot is in flight. |
 | `microstructure` | Order book imbalance, micro-price (with the crossed weighting — size on the far side pulls the price toward the near one), quoted spread, effective spread. |
 | `analysis` | Arrival benchmark at the decision instant, interval VWAP, a TWAP child-order simulator that walks the opposite side, and a four-layer shortfall attribution that sums to the total by construction. |
+| `research` | Whether the signals predict the next move (forward returns, quantile buckets, rank IC), and what real trades actually paid: effective spread against the contemporaneous mid, split into the part the resting side kept and the part the market took back. |
 
 ## Results
 

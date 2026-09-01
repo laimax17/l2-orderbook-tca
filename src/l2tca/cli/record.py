@@ -17,15 +17,21 @@ __all__ = ["run"]
 
 def run(args: argparse.Namespace) -> int:
     config = FeedConfig(
-        symbol=args.symbol, depth=args.depth, **({"url": args.url} if args.url else {})
+        symbol=args.symbol,
+        depth=args.depth,
+        trades=getattr(args, "trades", False),
+        **({"url": args.url} if args.url else {}),
     )
     directory = args.dir or Paths().raw
     path = args.out or default_capture_path(directory, config, compress=args.compress)
     recorder = JsonlRecorder(path, config)
 
     print(f"recording {config.wire_symbol} depth={config.depth} -> {path}")
-    print(f"stopping after {args.duration:.0f}s (Ctrl-C to stop early)" if args.duration
-          else "stopping on Ctrl-C")
+    print(
+        f"stopping after {args.duration:.0f}s (Ctrl-C to stop early)"
+        if args.duration
+        else "stopping on Ctrl-C"
+    )
 
     try:
         stats = asyncio.run(_record(config, recorder, args.duration))

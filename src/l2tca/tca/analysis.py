@@ -23,9 +23,21 @@ view exists at or before ``t``, raise rather than reaching forward.
 market, via ``d``. Route every measure through the same helper: a per-layer sign
 flip is how a report ends up flattering sells and punishing buys.
 
-Scope note: Kraken's ``book`` channel carries no trade prints. That is why the
-simulator fills aggressively only, and why market impact is not an attribution
-layer -- see ``docs/CORE.md``.
+Scope note: the ``trade`` channel is recorded alongside the book, so traded
+volume and executed prices are available to callers of this module from the
+``trade`` Parquet table. What that does and does not change:
+
+- :func:`interval_vwap` can now be given real volume buckets rather than
+  whatever a caller invents. The function is unchanged; its input has a source.
+- The simulator still fills aggressively only. Trade prints say *that* a trade
+  happened at a price, not *whose* order it was. Deciding a resting child would
+  have filled still needs a queue position, and L2 aggregates each level, so a
+  quantity could be one order or twenty.
+- Market impact is still not an attribution layer. Separating the move this
+  order caused from the move the market would have made anyway needs a control,
+  and observing other participants' trades is not one.
+
+See ``docs/CORE.md`` for the reasoning behind each.
 """
 
 from __future__ import annotations
@@ -109,8 +121,8 @@ def interval_vwap(
 
     view_ts = [v.recv_ns for v in views]
 
-    total_pv = Decimal('0')
-    total_volume = Decimal('0')
+    total_pv = Decimal("0")
+    total_volume = Decimal("0")
     valid_buckets = 0
 
     for ts_ns, vol in volumes:
@@ -123,19 +135,19 @@ def interval_vwap(
         target_view = views[idx]
         p_b = target_view.bids[0].price
         p_a = target_view.asks[0].price
-        p_mid = (p_b + p_a) / Decimal('2')
+        p_mid = (p_b + p_a) / Decimal("2")
 
         total_pv += p_mid * vol
         total_volume += vol
-        valid_buckets  += 1
+        valid_buckets += 1
 
     if valid_buckets == 0:
         raise ValueError("No valid bucket.")
 
-    if total_volume == Decimal('0'):
-        raise ValueError('Total volume is 0.')
+    if total_volume == Decimal("0"):
+        raise ValueError("Total volume is 0.")
 
-    return total_pv/total_volume
+    return total_pv / total_volume
 
 
 def simulate_child_orders(
@@ -154,13 +166,13 @@ def simulate_child_orders(
     traded volume, and an adaptive one would measure a signal rather than an
     execution.
 
-    **Every child crosses the spread and walks the opposite side.** Without trade
-    prints there is no evidence of when a resting order would have filled, and
-    inferring it needs a queue position that L2 data does not carry -- it
-    aggregates each level, so a quantity could be one order or twenty. This
-    makes the result an upper bound on cost whose assumptions are all visible in
-    the book, rather than a lower one resting on a queue model nothing can
-    validate.
+    **Every child crosses the spread and walks the opposite side.** Trade prints
+    are recorded, and they are not enough: they say a trade happened at a price,
+    not whose order was on the passive side of it. Deciding that a resting child
+    would have filled needs a queue position, and L2 aggregates each level, so a
+    quantity could be one order or twenty. This makes the result an upper bound
+    on cost whose assumptions are all visible in the book, rather than a lower
+    one resting on a queue model nothing here can validate.
 
     One :class:`Fill` per book level consumed, at that level's own price: a
     single averaged fill per slice would hide that the order walked five levels.
@@ -182,7 +194,7 @@ def simulate_child_orders(
 
     fills: list[Fill] = []
     view_timestamps = [v.recv_ns for v in views]
-    is_buy = order.side == Side('bid')
+    is_buy = order.side == Side("bid")
 
     for t_ns in schedule_times:
         if remaining_total_qty <= Decimal("0"):
@@ -248,7 +260,7 @@ def attribute_slippage(
     if not views:
         raise ValueError("views sequence cannot be empty")
 
-    d = Decimal("1") if order.side == Side('bid') else Decimal("-1")
+    d = Decimal("1") if order.side == Side("bid") else Decimal("-1")
 
     Q_t = order.target_qty
 

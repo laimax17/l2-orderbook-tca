@@ -10,6 +10,7 @@ from l2tca.io.schema import (
     signal_schema,
     snapshot_schema,
     tick_schema,
+    trade_schema,
 )
 from l2tca.io.writer import PartitionedParquetWriter
 
@@ -27,5 +28,6 @@ __all__ = [
     "snapshot_schema",
     "tick_rows_from_frame",
     "tick_schema",
+    "trade_schema",
     "validate_frame",
 ]

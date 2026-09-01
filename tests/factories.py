@@ -136,6 +136,40 @@ def fill(ts_ns: int, price: str, qty: str, *, fee: str = "0", is_taker: bool = T
     return Fill(ts_ns, Decimal(price), Decimal(qty), Decimal(fee), is_taker)
 
 
+def trade_frame(
+    prints: list[tuple[str, str, str]],
+    *,
+    symbol: str = "BTC/USD",
+    first_trade_id: int = 1,
+    timestamp: str = "2026-08-30T02:24:31.123456Z",
+    snapshot: bool = False,
+) -> str:
+    """A ``trade`` frame carrying ``(side, price, qty)`` prints, as JSON text.
+
+    Built from the wire shape rather than from :class:`Trades` so that the
+    parser is exercised rather than bypassed -- these tests exist partly to pin
+    a format that could not be verified against a live socket.
+    """
+    return json.dumps(
+        {
+            "channel": "trade",
+            "type": "snapshot" if snapshot else "update",
+            "data": [
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "price": float(price),
+                    "qty": float(qty),
+                    "ord_type": "market",
+                    "trade_id": first_trade_id + i,
+                    "timestamp": timestamp,
+                }
+                for i, (side, price, qty) in enumerate(prints)
+            ],
+        }
+    )
+
+
 def raw_messages(payloads: list[str], *, step_ns: int = 1_000_000) -> list[RawMessage]:
     """Stamp payloads with a regular, deterministic clock."""
     return [

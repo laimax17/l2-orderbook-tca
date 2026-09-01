@@ -62,9 +62,7 @@ def test_snapshot_replaces_rather_than_merges() -> None:
 
 def test_a_crossed_snapshot_is_rejected() -> None:
     with pytest.raises(ValueError):
-        OrderBook("BTC/USD", 4).apply_snapshot(
-            snapshot_frame([("101.0", "1")], [("100.0", "1")])
-        )
+        OrderBook("BTC/USD", 4).apply_snapshot(snapshot_frame([("101.0", "1")], [("100.0", "1")]))
 
 
 def test_a_snapshot_with_a_non_positive_quantity_is_rejected() -> None:
@@ -136,8 +134,9 @@ def test_a_frame_that_moves_both_sides_is_applied() -> None:
     book = OrderBook("BTC/USD", depth=10)
     book.apply_snapshot(snapshot_frame([("100.0", "1")], [("101.0", "1")]))
 
-    book.apply_update(update_frame([("102.0", "1"), ("100.0", "0")],
-                                   [("103.0", "1"), ("101.0", "0")]))
+    book.apply_update(
+        update_frame([("102.0", "1"), ("100.0", "0")], [("103.0", "1"), ("101.0", "0")])
+    )
 
     assert book.best_bid == (D("102.0"), D("1"))
     assert book.best_ask == (D("103.0"), D("1"))

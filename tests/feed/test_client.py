@@ -21,7 +21,11 @@ from l2tca.config import FeedConfig
 from l2tca.feed.client import KrakenFeedClient
 from l2tca.feed.messages import BookSnapshot
 from l2tca.feed.parser import parse
-from l2tca.feed.subscription import SubscriptionError, subscribe_request
+from l2tca.feed.subscription import (
+    SubscriptionError,
+    subscribe_request,
+    subscribe_requests,
+)
 
 
 async def collect(client: KrakenFeedClient, n: int) -> list:
@@ -72,9 +76,7 @@ async def test_rejected_subscription_is_not_retried() -> None:
         {"method": "subscribe", "req_id": 1, "success": False, "error": "Unsupported depth"}
     )
     socket = FakeWebSocket([rejection], on_exhaust="hang", ack=False)
-    client = KrakenFeedClient(
-        FeedConfig(max_reconnects=2), connect=sequenced_connect([socket])
-    )
+    client = KrakenFeedClient(FeedConfig(max_reconnects=2), connect=sequenced_connect([socket]))
 
     with pytest.raises(SubscriptionError, match="Unsupported depth"):
         await collect(client, 1)
@@ -209,3 +211,52 @@ async def test_cancellation_propagates(config: FeedConfig) -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# -- trade channel subscription --------------------------------------------
+
+
+def test_trade_subscription_omits_depth() -> None:
+    """`depth` is a book parameter; Kraken rejects unknown parameters outright."""
+    requests = subscribe_requests(FeedConfig(symbol="XBT/USD", trades=True), first_req_id=7)
+    assert [r["params"]["channel"] for r in requests] == ["book", "trade"]
+    assert [r["req_id"] for r in requests] == [7, 8]
+    assert requests[1]["params"] == {"channel": "trade", "symbol": ["BTC/USD"], "snapshot": True}
+
+
+def test_book_only_config_still_sends_one_request() -> None:
+    assert len(subscribe_requests(FeedConfig(), first_req_id=1)) == 1
+
+
+async def test_both_subscriptions_are_acknowledged() -> None:
+    socket = FakeWebSocket([STATUS_FRAME, SNAPSHOT_FRAME], on_exhaust="hang")
+    client = KrakenFeedClient(FeedConfig(trades=True), connect=sequenced_connect([socket]))
+    messages = await collect(client, 4)
+    acks = [
+        parse(m.payload) for m in messages if type(parse(m.payload)).__name__ == "SubscriptionAck"
+    ]
+    assert {a.result["channel"] for a in acks} == {"book", "trade"}
+    await client.aclose()
+
+
+async def test_a_rejected_trade_subscription_survives_an_early_snapshot() -> None:
+    """The failure this guards is silent: a capture that looks fine and has no trades.
+
+    The snapshot arrives before either acknowledgement, which used to be enough
+    to complete the handshake. If it still were, the rejection behind it would
+    never be read and the recording would quietly contain book frames only.
+    """
+    rejection = json.dumps(
+        {
+            "method": "subscribe",
+            "req_id": 2,
+            "success": False,
+            "error": "Subscription depth not supported",
+        }
+    )
+    socket = FakeWebSocket([SNAPSHOT_FRAME, rejection], on_exhaust="hang", ack=False)
+    client = KrakenFeedClient(
+        FeedConfig(trades=True, max_reconnects=2), connect=sequenced_connect([socket])
+    )
+    with pytest.raises(SubscriptionError, match="trade subscription"):
+        await collect(client, 3)

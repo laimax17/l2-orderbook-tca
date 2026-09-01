@@ -1,4 +1,4 @@
-"""Arrow schemas for the three stored tables, and the partition rule.
+"""Arrow schemas for the four stored tables, and the partition rule.
 
 Design decisions worth defending
 --------------------------------
@@ -40,9 +40,13 @@ __all__ = [
     "signal_schema",
     "snapshot_schema",
     "tick_schema",
+    "trade_schema",
 ]
 
 #: Bumped on any incompatible change to any table below. Written into every row.
+#: Adding a table is not one: a reader that does not know `trade` simply never
+#: asks for it, while a reader that does can tell an empty table from an absent
+#: one by whether the directory exists.
 SCHEMA_VERSION = 1
 
 
@@ -114,6 +118,43 @@ def signal_schema() -> pa.Schema:
     )
 
 
+def trade_schema() -> pa.Schema:
+    """One row per executed print on the ``trade`` channel.
+
+    Separate from ``tick`` rather than folded into it. The two answer different
+    questions -- ``tick`` is what the venue *offered*, this is what someone
+    actually *paid* -- and every execution-cost measure needs to join them
+    rather than confuse them.
+
+    ``side`` is the aggressor's, as the venue reports it. Storing it is the
+    point of the table: trade sign is otherwise inferred from the prevailing
+    quote, and that inference is wrong often enough to matter at the touch.
+
+    ``frame_type`` separates the backfill Kraken sends on subscribe from the
+    live stream, and it is not cosmetic. Backfilled prints executed before the
+    connection existed and all share one ``recv_ns``, so any rate or bucketed
+    average computed against arrival time counts them as simultaneous. Filter on
+    ``frame_type == 'update'``, or use ``exchange_ts_ns``, which is correct for
+    both.
+    """
+    return pa.schema(
+        [
+            pa.field("schema_version", pa.int32(), nullable=False),
+            pa.field("symbol", pa.string(), nullable=False),
+            pa.field("seq", pa.int64(), nullable=False),
+            pa.field("recv_ns", pa.int64(), nullable=False),
+            pa.field("recv_wall_ns", pa.int64(), nullable=False),
+            pa.field("exchange_ts_ns", pa.int64(), nullable=True),
+            pa.field("frame_type", pa.string(), nullable=False),  # snapshot | update
+            pa.field("trade_id", pa.int64(), nullable=True),
+            pa.field("side", pa.string(), nullable=False),  # aggressor: buy | sell
+            pa.field("price", pa.float64(), nullable=False),
+            pa.field("qty", pa.float64(), nullable=False),
+            pa.field("ord_type", pa.string(), nullable=True),
+        ]
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class TableSpec:
     """Everything the writer and reader need to know about one table."""
@@ -132,6 +173,7 @@ TABLES: dict[str, TableSpec] = {
     "tick": TableSpec("tick", tick_schema()),
     "snapshot": TableSpec("snapshot", snapshot_schema()),
     "signal": TableSpec("signal", signal_schema()),
+    "trade": TableSpec("trade", trade_schema()),
 }
 
 

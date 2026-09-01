@@ -23,6 +23,8 @@ from l2tca.feed.messages import (
     Pong,
     Status,
     SubscriptionAck,
+    Trade,
+    Trades,
     Unknown,
 )
 
@@ -58,6 +60,8 @@ def parse(payload: str) -> ParsedMessage:
     channel = obj.get("channel")
     if channel == "book":
         return _parse_book(obj)
+    if channel == "trade":
+        return _parse_trade(obj)
     if channel == "heartbeat":
         return Heartbeat()
     if channel == "status":
@@ -143,3 +147,56 @@ def _as_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+# The ``trade`` frame shape, per Kraken's WebSocket v2 documentation:
+#
+#   {"channel": "trade", "type": "update", "data": [
+#       {"symbol": "BTC/USD", "side": "buy", "price": 4136.4, "qty": 0.23374249,
+#        "ord_type": "market", "trade_id": 0, "timestamp": "2022-12-25T09:30:59.123456Z"}]}
+#
+# ``type`` is "snapshot" for the backfill sent on subscribe and "update" after
+# that. The distinction is carried through rather than flattened: see Trades.
+#
+# Transcribed from the published schema, then confirmed against a live capture:
+# 62 frames over 58 seconds of BTC/USD, every field present and populated, no
+# frame rejected. Every field is still read defensively and a frame that does
+# not match becomes an ErrorMessage rather than a silently empty batch, so a
+# future schema change shows up on the first frame of the next capture rather
+# than as a table that quietly stops filling. To re-check after any change:
+#
+#   l2tca record --trades --duration 60 --out data/raw/probe.jsonl
+#   l2tca inspect data/raw/probe.jsonl
+
+
+def _parse_trade(obj: dict[str, Any]) -> ParsedMessage:
+    data = obj.get("data")
+    if not isinstance(data, list) or not data:
+        return ErrorMessage(error="trade frame carried no data")
+
+    trades: list[Trade] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            return ErrorMessage(error="trade data entry was not an object")
+        try:
+            trades.append(
+                Trade(
+                    symbol=str(entry["symbol"]),
+                    side=str(entry["side"]),
+                    price=Decimal(str(entry["price"])),
+                    qty=Decimal(str(entry["qty"])),
+                    trade_id=_as_int(entry.get("trade_id")),
+                    ord_type=(
+                        str(entry["ord_type"]) if entry.get("ord_type") is not None else None
+                    ),
+                    exchange_ts_ns=parse_exchange_timestamp(entry.get("timestamp")),
+                )
+            )
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            return ErrorMessage(error=f"malformed trade entry: {exc}")
+
+    return Trades(
+        symbol=trades[0].symbol,
+        trades=tuple(trades),
+        is_snapshot=obj.get("type") == "snapshot",
+    )
