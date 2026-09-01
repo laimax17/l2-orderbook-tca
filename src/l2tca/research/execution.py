@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import polars as pl
 
-__all__ = ["execution_costs", "summarise_costs"]
+__all__ = ["TOUCH_TOLERANCE_BPS", "execution_costs", "summarise_costs"]
 
 #: Horizons at which the realized/impact split is reported. The choice matters:
 #: too short and the market has not finished reacting, too long and unrelated
@@ -119,6 +119,14 @@ def execution_costs(
     )
 
 
+#: Two effective spreads within this many basis points of each other are treated
+#: as equal. A trade at the touch pays *exactly* the quoted spread -- the algebra
+#: is an identity -- but the two sides reach it by different float paths, so a
+#: strict comparison splits the identical case roughly in half and reports
+#: nonsense price improvement. On the six-hour capture that was 77% of trades.
+TOUCH_TOLERANCE_BPS = 1e-6
+
+
 def summarise_costs(costs: pl.DataFrame) -> pl.DataFrame:
     """Size-weighted summary of :func:`execution_costs`, plus the shares worth knowing.
 
@@ -126,13 +134,22 @@ def summarise_costs(costs: pl.DataFrame) -> pl.DataFrame:
     mostly tiny and occasionally large; an unweighted mean describes the tiny
     ones, and it is the large ones that carry the cost.
 
-    ``price_improvement_share`` is the fraction of notional that traded at a
-    better price than the touch advertised -- an effective spread below the
-    quoted one. ``through_touch_share`` is the fraction that paid more, which is
-    what walking several levels looks like.
+    **Read the median beside the mean.** The distribution is not close to
+    symmetric: most trades take the touch and pay exactly the quoted spread,
+    while a thin tail executes when the book is momentarily wide. The mean
+    describes the tail, the median describes the typical trade, and quoting
+    either alone misleads.
+
+    ``at_touch_share`` is the fraction of notional paying the quoted spread
+    within a tolerance; ``price_improvement_share`` paid less, and
+    ``through_touch_share`` more. The tolerance is not cosmetic -- see
+    :data:`TOUCH_TOLERANCE_BPS`.
     """
     if costs.is_empty():
         raise ValueError("no trades to summarise")
+
+    gap = pl.col("effective_bps") - pl.col("quoted_spread_bps")
+    at_touch = gap.abs() <= TOUCH_TOLERANCE_BPS
 
     def weighted(column: str) -> pl.Expr:
         usable = pl.col(column).is_not_null()
@@ -149,14 +166,17 @@ def summarise_costs(costs: pl.DataFrame) -> pl.DataFrame:
         weighted("effective_bps"),
         weighted("realized_bps"),
         weighted("impact_bps"),
-        (
-            (pl.col("effective_bps") < pl.col("quoted_spread_bps")) * pl.col("notional")
-        ).sum()
+        pl.col("effective_bps").median().alias("effective_bps_median"),
+        (at_touch * pl.col("notional"))
+        .sum()
+        .truediv(pl.col("notional").sum())
+        .alias("at_touch_share"),
+        ((~at_touch & (gap < 0)) * pl.col("notional"))
+        .sum()
         .truediv(pl.col("notional").sum())
         .alias("price_improvement_share"),
-        (
-            (pl.col("effective_bps") > pl.col("quoted_spread_bps")) * pl.col("notional")
-        ).sum()
+        ((~at_touch & (gap > 0)) * pl.col("notional"))
+        .sum()
         .truediv(pl.col("notional").sum())
         .alias("through_touch_share"),
         pl.col("realized_bps").is_null().sum().alias("no_horizon"),

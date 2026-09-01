@@ -227,3 +227,46 @@ def test_trading_inside_the_touch_costs_less_than_quoted() -> None:
     costs = execution_costs(at_mid, book, horizon_ns=SECOND)
     assert max(abs(v) for v in costs["effective_bps"]) < 1e-6
     assert summarise_costs(costs)["price_improvement_share"][0] == 1.0
+
+
+@pytest.mark.core
+def test_touch_trades_are_not_split_by_float_noise() -> None:
+    """The bug this pins was found in production output, not by a test.
+
+    A trade at the touch pays exactly the quoted spread -- the algebra is an
+    identity. The two sides reach it by different float paths, so a strict
+    inequality splits the identical case roughly in half and reports price
+    improvement on trades that got none. On the six-hour capture it labelled
+    14.3% of notional as improved and 60.5% as through the touch, when a direct
+    price comparison put 76.9% exactly at it and 0% inside.
+    """
+    from pathlib import Path
+
+    from l2tca.io.derive import iter_book_views, signal_rows
+    from l2tca.research import signals_wide
+
+    views = [v for _m, v in iter_book_views(Path("tests/fixtures/sample.jsonl.gz"), limit=600)]
+    views = [v for v in views if v.bids and v.asks]
+    book = signals_wide(pl.DataFrame([row for v in views for row in signal_rows(v)]))
+
+    at_touch = trades(
+        [(v.recv_ns, "buy", float(v.asks[0].price), 1.0) for v in views]
+        + [(v.recv_ns, "sell", float(v.bids[0].price), 1.0) for v in views]
+    )
+    summary = summarise_costs(execution_costs(at_touch, book, horizon_ns=SECOND))
+
+    assert summary["at_touch_share"][0] == pytest.approx(1.0)
+    assert summary["price_improvement_share"][0] == pytest.approx(0.0)
+    assert summary["through_touch_share"][0] == pytest.approx(0.0)
+
+
+def test_the_median_is_reported_beside_the_mean() -> None:
+    """One tiny trade at the touch and one huge one deep: they are different facts."""
+    out = execution_costs(
+        trades([(0, "buy", 100.10, 0.001), (0, "buy", 105.00, 500.0)]),
+        book(),
+        horizon_ns=5 * SECOND,
+    )
+    summary = summarise_costs(out)
+    # The mean follows the notional, the median follows the trade count.
+    assert summary["effective_bps_vw"][0] > summary["effective_bps_median"][0]

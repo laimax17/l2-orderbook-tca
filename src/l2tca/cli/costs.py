@@ -45,8 +45,10 @@ def run(args: argparse.Namespace) -> int:
     ratio = first["effective_bps_vw"] / first["quoted_spread_bps_vw"]
     print(
         f"\n{first['trades']:,} trades, {first['notional']:,.0f} quote units of notional"
-        f"\neffective / quoted = {ratio:.3f}"
-        f"   ({first['price_improvement_share']:.1%} of notional inside the touch)"
+        f"\nmedian effective spread {first['effective_bps_median']:.4f} bps"
+        f"   ({first['at_touch_share']:.1%} of notional pays exactly the quoted spread)"
+        f"\nsize-weighted mean {first['effective_bps_vw']:.4f} bps = {ratio:.1f}x quoted"
+        " -- the distribution is heavy-tailed, read the median beside it"
     )
     if first["no_horizon"]:
         print(
