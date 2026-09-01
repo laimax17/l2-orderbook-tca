@@ -9,9 +9,11 @@ harness and plotting. On top of that, the part worth writing by hand: L2
 reconstruction, the checksum and resynchronisation state machine, microstructure
 signals, and four execution-cost measures. See [The core](#the-core).
 
-A frame goes from socket to updated book in **25 µs** at the median, 35 µs at
-the 99th, sustaining 32k updates/s on one core — measured, not estimated; see
-[Results](#results).
+A frame goes from socket to updated book in **13.8 µs** at the median, 20.7 µs
+at the 99th, sustaining **53k updates/s** on one core. Over six hours and 2.02
+million frames, through three connection drops, the reconstruction agreed with
+the exchange's own checksum on **every single frame**. All measured, none
+estimated; see [Results](#results).
 
 Read-only against the exchange's public feed. There is no authenticated
 endpoint, no order entry, and no broker credential anywhere in the repository.
@@ -91,8 +93,9 @@ per-frame sequence number; what it sends is a CRC32 over the top ten levels of
 each side, recomputed on every frame. The book recomputes it and compares. A
 mismatch means the two books have diverged, and the only honest response is to
 throw the local one away and resubscribe — which is the edge looping back to
-`client.py`. This is why the results table can claim 23,602 of 23,602 frames
-verified rather than "the tests pass".
+`client.py`. This is why the results table can claim 2,021,204 of 2,021,204
+frames verified rather than "the tests pass" — and it is not hypothetical: that
+loop ran three times during the six-hour session below.
 
 ## Scope
 
@@ -219,65 +222,131 @@ What the core does:
 
 ## Results
 
-From one BTC/USD recording at depth 100: **598.9 s, 24,203 frames** (23,602
-updates, 1 snapshot, 40.4 frames/s), replayed with the first 500 frames dropped
-as warmup and snapshot rebuilds excluded.
+One BTC/USD session at depth 100: **6.0 hours, 2,053,953 frames** (2,021,204
+book updates, 11,158 trade frames, 95.1 frames/s), on **Apple Silicon, macOS
+26.4.1, CPython 3.14.7**. Latency numbers are meaningless without the machine,
+which is why every report carries its own environment block. Replayed with the
+first 500 frames dropped as warmup and snapshot rebuilds excluded.
 
-Machine: **Apple Silicon (arm64), macOS 26.4.1, CPython 3.14.7.** Latency
-numbers are meaningless without it, which is why every report carries its own
-environment block.
+### Reconstruction
 
 | | |
 |---|---|
-| recv → book-updated, p50 / p99 / p99.9 | **24.96 / 35.50 / 75.33 µs** (max 175.29) |
-| `apply_update`, p50 / p99 | **4.38 / 8.79 µs** (max 65.58) |
-| `view(10)`, p50 / p99 | **13.75 / 16.63 µs** (max 98.63) |
-| `apply_snapshot`, 100 levels a side | **448.75 µs**, once per connection |
-| Sustained throughput | **32,155 updates/s** — 23,602 in 0.734 s of wall clock |
-| Checksum verification rate | **23,602 / 23,602 (100.00%)**, 0 sequence gaps |
-| Internal representation A/B (dict vs sorted vs tick array) | not measured — see below |
-| Capture size, 10 minutes at depth 100 | **7.8 MB** JSONL, ≈13.7 KB/s, ≈47 MB/hour; **10.4×** smaller gzipped |
+| Checksum agreement | **2,021,204 / 2,021,204 (100.00%)** |
+| Sequence gaps | **0** |
+| Disconnects survived | **3**, each followed by a resubscribe and a fresh snapshot |
 
-Reproduce with `uv run l2tca bench <capture> --warmup 500 --histogram` and
-`uv run l2tca inspect <capture> --verify`. Every update frame in the capture was
-replayed into the book and checked against the CRC32 Kraken computed over the
-top ten levels of each side — ten minutes of continuous incremental
-reconstruction with no drift, attested by the exchange's own ledger rather than
-by hand-written expectations. Without a capture of your own, the same command
-over `tests/fixtures/sample.jsonl.gz` reruns it on the opening 143 s
-(4852 / 4852).
+Every update frame was applied to the book and checked against the CRC32 Kraken
+computes over the top ten levels of each side. Six hours of continuous
+incremental reconstruction with no drift, through three connection drops —
+attested by the exchange's own ledger rather than by expectations written by the
+same person who wrote the book. The resynchronisation path is not a unit test
+here; it ran three times against a live venue and the checksums stayed exact
+either side of it.
 
-> **These figures predate the read-path optimisation** described in
-> [`PERFORMANCE.md`](PERFORMANCE.md) and are kept as the baseline it was measured
-> against. Re-run `l2tca bench` to refresh them.
+### Latency
 
-**What that table said, and what was done about it.**
+| Stage | p50 | p99 | p99.9 |
+|---|---:|---:|---:|
+| `recv → book-updated` | **13.79 µs** | 20.67 µs | 59.29 µs |
+| `parse` | 5.67 | 9.00 | 25.79 |
+| `book.apply_update` | 4.25 | 7.29 | 19.79 |
+| `book.view(n=10)` | 3.25 | 3.79 | 12.50 |
+| `book.apply_snapshot` | 245.83 | — | — (4 samples) |
 
-`view(10)` cost **3.1×** what `apply_update` did — 13.75 µs against 4.38 µs.
-Reading the top ten levels out of the book was three times more expensive than
-maintaining it, which is not where the cost was expected to be, and since every
-frame is both written and read it was more than half the end-to-end path.
+**53,096 updates/s** sustained: 2,021,204 of them in 38.07 s of wall clock.
 
-The obvious suspect was the data structure. It was not: `depth_levels` was
-rebuilding `Level` objects the book already held, paying an allocation and a
-second `Decimal`-keyed lookup per level. Reading the values view directly made
-`view(10)` **2.95× faster** and end-to-end **1.51×**, with throughput up 48.8%
-and the checksum still agreeing on every frame. Six lines. The measurements,
-the equivalence proof over 24,260 (frame, n) pairs, and the reason the
-representation A/B would have drawn the wrong conclusion had it been run first
-are in [`PERFORMANCE.md`](PERFORMANCE.md).
+`parse` is now the largest term in the path, at 1.3× an update. That is the
+price of `parse_float=Decimal`, paid so the wire digits reach the checksum
+unrounded — floats would be faster and would silently break the integrity check
+above, so the trade is deliberate.
 
-Parsing costs **1.4×** an update — 6.29 µs against 4.38 µs. That is the price of
-`parse_float=Decimal`, paid so the wire digits survive exactly into the checksum.
-Floats would be faster and would silently break integrity checking, so the
-trade is deliberate; it is worth knowing it is now the largest term after the
-end-to-end path itself.
+Reading the top of the book used to cost **3.1×** maintaining it, which is not
+where the cost was expected to be. The cause was not the data structure:
+`depth_levels` was rebuilding `Level` objects the book already held, paying an
+allocation and a second `Decimal`-keyed lookup per level. Six lines fixed it.
+[`PERFORMANCE.md`](PERFORMANCE.md) has the clean same-capture, three-run A/B —
+`view(10)` 2.95× faster, end-to-end 1.51×, throughput +48.8% — the equivalence
+proof over 24,260 (frame, n) pairs, and why running the representation
+comparison first would have compared three candidates all carrying the same
+avoidable overhead.
 
-The representation A/B is the one row here that is not a measurement but a
-project: it means writing the book a second and third way (a plain dict sorted
-on read, a fixed tick array indexed by price level) and benchmarking all three.
-Left undone rather than guessed at — with two measurements that constrain it
-recorded in [`PERFORMANCE.md`](PERFORMANCE.md).
+### Execution cost
+
+**22,594 observed trades**, 429.3 BTC, $33.9M notional, priced against the book
+that stood at each one.
+
+| | |
+|---|---|
+| Quoted spread, size-weighted | **0.0918 bps** |
+| Effective spread, **median** | **0.0127 bps** — one tick, exactly the quoted spread |
+| Effective spread, size-weighted mean | **1.1185 bps** — 12.2× quoted |
+| Notional paying exactly the quoted spread | **57.0%** (76.9% of trades) |
+| Notional paying more | 43.0% (23.1% of trades) |
+| Notional paying less | **0.0%** |
+
+Read the median beside the mean; neither alone is honest. The typical trade takes
+the touch and pays one tick. The mean is twelve times that because the
+distribution has a thin, expensive tail: the quoted spread is 1 tick at the
+median and **59 ticks at the 99th percentile**, and trades cluster where it is
+wide. The gap between 76.9% of *trades* and 57.0% of *notional* at the touch is
+the same fact from the other side — the larger the order, the more likely it
+goes through.
+
+Nothing traded inside the touch, which is what a venue with no hidden liquidity
+and no price improvement mechanism should look like.
+
+**Where the spread went**, size-weighted, in basis points:
+
+| Horizon | Effective | = Realized | + Impact |
+|---|---:|---:|---:|
+| 1 s | 1.1185 | **−0.1284** | +1.2469 |
+| 5 s | 1.1185 | **−0.5850** | +1.7036 |
+| 30 s | 1.1185 | **−2.0745** | +3.1932 |
+
+The decomposition is exact by construction. Realized spread is what the resting
+side still had after the market finished reacting, and over this session it is
+**negative at every horizon and falls as the horizon lengthens**: providing
+liquidity at the touch gave back the whole spread and more. The entire effective
+spread, and then some, is adverse selection — the takers were, on aggregate,
+informed.
+
+That is one session on one venue, size-weighted and therefore dominated by the
+same tail as the mean above. It is a measurement, not a conclusion about market
+making.
+
+### Reproduce
+
+```bash
+uv run l2tca bench   <capture> --warmup 500 --histogram
+uv run l2tca inspect <capture> --verify
+uv run l2tca convert <capture> --out data/parquet
+uv run l2tca signals <capture> --out data/parquet
+uv run l2tca costs   --root data/parquet --horizons 1 5 30
+```
+
+Without a capture of your own, `tests/fixtures/sample.jsonl.gz` runs the first
+three on the opening 143 s of the same session (4,852 / 4,852 checksums).
+
+### Not measured
+
+The internal-representation A/B — `SortedDict` against a plain dict sorted on
+read, against a tick-indexed array — is unfilled, and it is not an oversight: it
+means writing the book two more ways and benchmarking three, which is a project
+rather than a measurement. `run_book_benchmark` already takes a `book_factory`,
+so the harness for it exists.
+
+Two things measured while sizing that work, which constrain it:
+
+- The book spans a **median of 1,588 ticks** at 0.1 (max 1,961) and holds 200
+  levels inside that span — an occupancy of **12.6%**. A dense array is 87%
+  empty, so extracting the top ten means scanning outward across mostly empty
+  slots rather than indexing. Whether that beats ten tree lookups is genuinely
+  open, which is what makes the comparison worth running.
+- Over 143 seconds the mid drifted 349 ticks, and that capture spans 2,091
+  slots. A ten-minute capture fits comfortably in a fixed array sized from its
+  own min and max, so a replay benchmark needs no re-centring logic — the part
+  of a tick array most likely to harbour a bug.
 
 ## Design decisions
 
